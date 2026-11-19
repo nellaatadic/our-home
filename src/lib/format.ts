@@ -1,7 +1,7 @@
-export function money(cents: number | null | undefined, currency = 'EUR') {
+export function money(cents: number | null | undefined, currency = 'CAD') {
   if (cents == null) return '';
   try {
-    return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(cents / 100);
+    return new Intl.NumberFormat('en-CA', { style: 'currency', currency }).format(cents / 100);
   } catch {
     return `${(cents / 100).toFixed(2)} ${currency}`;
   }
@@ -50,4 +50,23 @@ export function qty(n: number | null | undefined, unit?: string | null) {
   if (n == null) return '';
   const s = Number.isInteger(n) ? String(n) : String(Math.round(n * 100) / 100);
   return unit ? `${s} ${unit}` : `×${s}`;
+}
+
+/** "14:00" → "2:00 PM" (12-hour, as used in Canada). */
+export function time12(t: string | null | undefined) {
+  if (!t) return '';
+  const [h, m] = t.split(':').map(Number);
+  return `${((h + 11) % 12) + 1}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
+}
+
+/** "Today", "Tomorrow", "Yesterday" or a short date, plus the time if set. */
+export function dueLabel(date: string | null | undefined, time: string | null | undefined, today: string) {
+  if (!date) return '';
+  const d = date === today ? 'Today' : date === addDays(today, 1) ? 'Tomorrow' : date === addDays(today, -1) ? 'Yesterday' : day(date, { weekday: 'short', month: 'short', day: 'numeric' });
+  return time ? `${d}, ${time12(time.slice(0, 5))}` : d;
+}
+
+export function greeting(tz: string) {
+  const h = Number(new Intl.DateTimeFormat('en-CA', { timeZone: tz, hour: 'numeric', hourCycle: 'h23' }).format(new Date()));
+  return h < 5 ? 'Good night' : h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
 }

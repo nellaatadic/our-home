@@ -4,10 +4,6 @@ import { api, useApi } from '../lib/api';
 import { useMe, useSession } from '../lib/session';
 import { Field, useAction, useToast } from '../components/ui';
 
-const SECTIONS = [
-  ['today', 'Today’s shared events'], ['need', 'Shopping NEED list'], ['reminders', 'Reminders & due soon'], ['assigned', 'Who’s doing what'],
-  ['awaiting', 'Waiting for your opinion'], ['upcoming', 'Coming up'], ['recent', 'Recently in US'],
-] as const;
 const PREFS = [
   ['notify_mentions', 'When someone mentions me'], ['notify_replies', 'Replies in conversations I’m part of'], ['notify_shared', 'New things shared with US'],
   ['notify_assigned', 'Tasks assigned to me and their updates'], ['notify_reminders', 'Reminders'], ['notify_calendar', 'Changes to the US calendar'], ['notify_decisions', 'Reactions and decisions'],
@@ -51,7 +47,7 @@ export function SettingsPage() {
         <h2>Household</h2>
         <div className="grid-2">
           <Field label="Name"><input value={hh.name} onChange={(e) => setHh({ ...hh, name: e.target.value })} maxLength={80} /></Field>
-          <Field label="Time zone" hint="IANA name, e.g. Europe/Budapest"><input value={hh.timezone} onChange={(e) => setHh({ ...hh, timezone: e.target.value })} /></Field>
+          <Field label="Time zone" hint="IANA name, e.g. America/Toronto"><input value={hh.timezone} onChange={(e) => setHh({ ...hh, timezone: e.target.value })} /></Field>
           <Field label="Currency"><input value={hh.currency} onChange={(e) => setHh({ ...hh, currency: e.target.value.toUpperCase() })} maxLength={3} /></Field>
         </div>
         <label className="check"><input type="checkbox" checked={me.household.auto_move_to_stock} onChange={(e) => run(async () => setSession(await api.patch('/household', { auto_move_to_stock: e.target.checked })))} /> When a NEED item is ticked off, move it to STOCK without asking for the quantity</label>
@@ -72,11 +68,15 @@ export function SettingsPage() {
         )}
       </section>
 
+      <section className="card" id="calendar-privacy">
+        <h2>Calendar</h2>
+        {s && <label className="check"><input type="checkbox" checked={s.share_availability} onChange={(e) => patchSettings({ share_availability: e.target.checked })} /> Show my private events to {me.partner?.display_name ?? 'my partner'} as “Busy”</label>}
+        <p className="muted small">Only the time is shown, never the title, place or notes. Off by default. The dashboard and day view then show both schedules side by side.</p>
+      </section>
+
       <section className="card" id="dashboard">
         <h2>Dashboard</h2>
-        {s && SECTIONS.map(([k, label]) => (
-          <label key={k} className="check"><input type="checkbox" checked={s.dashboard_sections.includes(k)} onChange={(e) => patchSettings({ dashboard_sections: e.target.checked ? [...s.dashboard_sections, k] : s.dashboard_sections.filter((x: string) => x !== k) })} /> {label}</label>
-        ))}
+        <p className="muted small">Use the ⋯ button on each list on the dashboard to change how many items it shows and its size, or to hide it.</p>
       </section>
 
       <section className="card">

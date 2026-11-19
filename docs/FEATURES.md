@@ -6,53 +6,50 @@
 - 🔑 **Built, needs credentials:** fully implemented but switched off until you configure it.
 - ⚠️ **Limitation:** works, with the restriction described.
 
-## Accounts, spaces and privacy
+## Accounts and privacy
 | Feature | Status |
 |---|---|
 | Primary account creates the household; partner joins with a single-use, 7-day invite link | ✅ |
-| Separate logins; display name editable (shown as YOU to the partner) | ✅ |
-| ME / YOU / US spaces; privacy enforced in every SQL query (unauthorized = 404) | ✅ tested (Scenario H) |
-| Other households fully isolated; sign-up closes after the first user (`SIGNUP_MODE`) | ✅ |
+| Separate logins; editable display names | ✅ |
+| Shared unless locked: lock icon when adding, Private switch in details; only the creator can lock; a locked item takes its chat, photos, subtasks and history with it | ✅ tested |
+| Privacy enforced in every SQL query (unauthorized = 404); other households fully isolated | ✅ tested (Scenario H) |
 | Sessions, CSRF protection, rate limiting, scrypt passwords, password change | ✅ |
-| Share single items or whole lists: preview, select or deselect, edit, duplicate warnings | ✅ tested (Scenario A + UI test) |
-| Copy by default; explicit move; "Remove from US" (archives the shared copy) | ✅ |
-| Provenance: original owner, shared by, shared at, "edited since sharing", original changed since sharing | ✅ |
-| Household limited to two members | ✅ |
+| Household defaults: America/Toronto, CAD | ✅ tested |
 
-## Lists
+## Lists (Groceries · Home & Gadgets · Shopping & Other)
 | Feature | Status |
 |---|---|
-| Groceries NEED / STOCK with quantity, unit, category, priority, notes, assignee, store, link, price, images | ✅ |
-| Default food and household categories, plus custom categories with colours; consistent priority colours | ✅ |
-| Filter and sort by category, priority, person; several lists per space | ✅ |
-| Mark purchased → STOCK (with quantity, or automatically per household setting); merges into an existing STOCK entry; "ran out" → NEED | ✅ |
-| STOCK expiry dates and storage location | ✅ |
-| Home improvement: room, dimensions, colour/material, link with preview, several images, status, target date | ✅ |
-| Side-by-side comparison of alternatives; mark the preferred option | ✅ |
-| Ideas / gifts / clothes / trips / restaurants: type, intended person (household member or anyone), tags, filters | ✅ |
-| Link previews (title, image, price from page metadata), with SSRF protection | ✅ ⚠️ only sites that publish Open Graph / product metadata; otherwise the link is kept and you can add a photo |
+| Same structure for all three: NEED / STOCK, sections (categories), tap the circle to mark bought or ran out | ✅ tested |
+| Search icon opens search plus filters (section, priority, added by, shared/private, flagged, urgent, has a date) and sorting | ✅ tested |
+| Scan receipt button on Groceries (photo, PDF or pasted text → review → ticks off NEED items, adds to STOCK) | ✅ tested (Scenario F) |
+| Reminders-style details: notes, URL, date, time, urgent, repeat, early reminder, list, section, tags, subtasks, flag, priority, quantity, store, price, photos | ✅ |
+| Dated items send reminders (urgent ones to both of you); repeating items stay on NEED with the next date when bought | ✅ tested |
+| Move an item to another list | ✅ tested |
+| Link previews (title, image, price from page metadata), with SSRF protection | ✅ ⚠️ only sites that publish Open Graph / product metadata |
 
-## Decisions and conversations
+## Chat
 | Feature | Status |
 |---|---|
-| Decision states (idea → considering → discussing → approved → purchased / rejected) and purchase stages | ✅ |
-| Quick reactions (❤️ 👍 🤔 👎); "waiting for your opinion" on the dashboard | ✅ |
-| A thread on every item, task, event and inventory entry: replies, @mentions (@Name, @ME, @YOU), editing and deleting your own messages, attachments, read / unread | ✅ tested (Scenario B) |
-| Notifications: mentions, replies, shares, assignments, reminders, calendar changes, decisions; mark read; per-type preferences | ✅ |
-| Email / push notifications | ⚠️ not built (in-app only, as allowed by the spec) |
+| Comment button next to every item: quick chat on the spot, with photos, files and links | ✅ |
+| Chat page: every conversation as a small card (title only), expandable inline; one ongoing chat between you two on the right | ✅ tested |
+| Type @ to mention your partner or link any shared card (item, event, to-do, topic); links open the card | ✅ tested |
+| Topics: conversations not tied to an item (can be private) | ✅ tested |
+| Replies, edit and delete your own messages, read / unread, unread badge | ✅ |
+| Notifications: mentions, replies, assignments, reminders, calendar changes, reactions; per-type preferences | ✅ |
+| Email / push notifications | ⚠️ not built (in-app only) |
 
-## Tasks and maintenance
+## Dashboard
 | Feature | Status |
 |---|---|
-| Tasks with optional date and time, priority, ME / YOU / BOTH, six statuses, reminder, recurrence, details, discussion | ✅ tested (Scenario G) |
-| Recurring maintenance rolls forward on completion, with completion history | ✅ |
-| Reminder → calendar event; event → follow-up tasks | ✅ |
-| Reminders delivered by a scheduled function (every 15 min) and when the app is opened | ✅ |
+| Row 1: greeting and date, then Groceries, Home & Gadgets, Shopping & Other widgets: add (shared or locked), items shown (3–12), size (S/M/L), hide, expand to full list | ✅ tested |
+| Row 2: Important dates (birthdays, anniversaries, social, holidays; yearly repeats), To do & reminders (to-dos plus dated items), Today (hourly, both schedules) | ✅ tested |
 
 ## Calendar
 | Feature | Status |
 |---|---|
-| Month and agenda views; private vs shared visibly distinguished; household time zone | ✅ |
+| Day (hourly, one column per person), week (hourly) and month views; shared vs private distinguished | ✅ |
+| Birthdays and anniversaries repeat every year | ✅ tested |
+| Partner's private time as anonymous Busy blocks, only if they opt in (Settings → Calendar) | ✅ tested |
 | Manual events (all-day, multi-day, time not set, participants, category, "about" person) | ✅ |
 | Text → event drafts (bullets / sentences, several events), ambiguity questions, no invented details | ✅ tested (Scenario E), built-in parser |
 | AI-assisted text → events | 🔑 `ANTHROPIC_API_KEY` |
@@ -62,14 +59,14 @@
 | Export a US event into *my* Google Calendar: edit, choose calendar, preview, confirm, duplicate warning | 🔑 tested |
 | Recurring Google events | ⚠️ imported as individual occurrences (each one independent); the recurrence rule is stored for reference |
 
-## Receipts, inventory and expenses
+## Data analysis
 | Feature | Status |
 |---|---|
-| Upload a receipt photo or PDF (stored privately), or paste receipt text | ✅ |
-| Review screen: edit names, quantities, prices, categories; uncertain lines flagged and blocking; matching NEED items offered as completed; merge into existing STOCK | ✅ tested (Scenario F) |
-| Automatic reading of receipt photos and PDFs | 🔑 `ANTHROPIC_API_KEY` (without it, the photo is stored and you enter the lines by hand or paste text) |
-| Room-based inventory with brand, model, dimensions, purchase date, price, warranty, manual link, images, notes | ✅ |
-| Expenses: individual or shared, equal or custom split, who paid vs who is responsible, totals by category, link to receipt | ✅ |
+| Spending: last 6 months, by category, who paid, who owes whom (from confirmed receipts and shared expenses) | ✅ tested |
+| Grocery habits: bought most often, ran out most often, average days from list to bought | ✅ tested |
+| Open topics: open / overdue to-dos, urgent and flagged items, decisions, chats where your partner spoke last | ✅ |
+| Calendar load: events per week for the next 8 weeks | ✅ |
+| Removed from the interface (data is kept): tasks page, inventory, expenses page, ideas page, YOU page | ⚠️ by request |
 
 ## Organisation and data
 | Feature | Status |

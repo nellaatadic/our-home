@@ -56,7 +56,7 @@ export function ReceiptPage() {
     });
     emitChange();
     toast(`${res.added} added to STOCK, ${res.completed} NEED item${res.completed === 1 ? '' : 's'} completed${res.merged ? `, ${res.merged} merged` : ''}`);
-    nav(`/${r.space}/groceries`);
+    nav('/lists/groceries?state=stock');
   });
 
   return (

@@ -57,7 +57,7 @@ export function LoginPage() {
 function RegisterForm({ inviteToken, inviteEmail }: { inviteToken?: string; inviteEmail?: string | null }) {
   const { setSession } = useSession();
   const nav = useNavigate();
-  const [f, setF] = useState({ email: inviteEmail ?? '', password: '', display_name: '', household_name: 'Our home', timezone: Intl.DateTimeFormat().resolvedOptions().timeZone });
+  const [f, setF] = useState({ email: inviteEmail ?? '', password: '', display_name: '', household_name: 'Our home', timezone: 'America/Toronto' });
   const [error, setError] = useState<Error | null>(null);
   const [busy, setBusy] = useState(false);
   const submit = async (e: React.FormEvent) => {

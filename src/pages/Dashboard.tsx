@@ -1,129 +1,191 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { CalendarDays, Check, ListChecks, MessageCircle, ShoppingBasket, Sparkles } from 'lucide-react';
+import { CalendarHeart, CalendarDays, Check, ChevronRight, Lock, LockOpen, Maximize2, MoreHorizontal, Plus } from 'lucide-react';
 import { api, emitChange, useApi } from '../lib/api';
 import { useMe } from '../lib/session';
-import { day, eventTime, qty, relative } from '../lib/format';
+import { day, dueLabel, greeting } from '../lib/format';
+import { LISTS } from '../lib/lists';
 import { useOpen } from '../components/Layout';
-import { Empty, Loading, PriorityDot, SpaceTag, useAction } from '../components/ui';
+import { ItemRow, usePurchase } from '../components/ItemRow';
+import { TimeGrid } from '../components/TimeGrid';
+import { Loading, useAction } from '../components/ui';
 
-function Section({ title, icon, children, action }: { title: string; icon: React.ReactNode; children: React.ReactNode; action?: React.ReactNode }) {
+type Widget = { max: number; size: 's' | 'm' | 'l'; hidden?: boolean };
+
+export function DashboardPage() {
+  const me = useMe();
+  const { data, setData } = useApi<any>('/dashboard');
+  const { run } = useAction();
+  if (!data) return <div className="page"><Loading /></div>;
+  const widgets: Record<string, Widget> = data.prefs.widgets;
+  const hidden = LISTS.filter((l) => widgets[l.module]?.hidden);
+
+  const saveWidget = (module: string, w: Widget) => run(async () => {
+    const next = { ...widgets, [module]: w };
+    setData({ ...data, prefs: { ...data.prefs, widgets: next } });
+    await api.patch('/household/settings', { dashboard: { widgets: next } });
+    emitChange();
+  });
+
   return (
-    <section className="card">
-      <header className="card-head"><h2>{icon}{title}</h2>{action}</header>
-      {children}
+    <div className="page dashboard">
+      <div className="dash-row first">
+        <section className="tile greet">
+          <p className="greet-hello">{greeting(me.household.timezone)},</p>
+          <h1>{me.user.display_name}</h1>
+          <p className="greet-date">{day(data.today, { weekday: 'long' })}{' '}<br /><b>{day(data.today, { month: 'long', day: 'numeric' })}</b></p>
+          {data.unread_messages > 0 && <Link to="/chat" className="greet-chat">{data.unread_messages} new message{data.unread_messages > 1 ? 's' : ''} <ChevronRight size={13} /></Link>}
+          {hidden.length > 0 && (
+            <button className="link-btn tiny" onClick={() => hidden.forEach((l) => saveWidget(l.module, { ...widgets[l.module], hidden: false }))}>Show {hidden.map((l) => l.short).join(', ')}</button>
+          )}
+        </section>
+        {LISTS.filter((l) => !widgets[l.module]?.hidden).map((l) => (
+          <ListWidget key={l.module} list={l} data={data.lists[l.module]} widget={widgets[l.module]} onSave={(w) => saveWidget(l.module, w)} />
+        ))}
+      </div>
+      <div className="dash-row second">
+        <ImportantDates events={data.important_dates} today={data.today} />
+        <Todos todos={data.todos} items={data.dated_items} today={data.today} />
+        <section className="tile">
+          <header className="tile-head">
+            <h2><CalendarDays size={16} /> Today</h2>
+            <Link to="/calendar" className="icon-btn small" aria-label="Open calendar"><Maximize2 size={14} /></Link>
+          </header>
+          <TimeGrid days={[data.today]} events={data.today_events} busy={data.partner_busy} lanes={Boolean(me.partner)} hourHeight={24} fromHour={8} toHour={21} compact />
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function ListWidget({ list, data, widget, onSave }: { list: (typeof LISTS)[number]; data: { items: any[]; need: number }; widget: Widget; onSave: (w: Widget) => void }) {
+  const me = useMe();
+  const [adding, setAdding] = useState(false);
+  const [title, setTitle] = useState('');
+  const [locked, setLocked] = useState(false);
+  const [menu, setMenu] = useState(false);
+  const { run, busy } = useAction();
+  const purchase = usePurchase();
+  const add = () => title.trim() && run(async () => {
+    await api.post(`/modules/${list.module}/items`, { title: title.trim(), private: locked });
+    setTitle('');
+    emitChange();
+  });
+  return (
+    <section className={`tile list-tile size-${widget.size}`} style={{ ['--list' as any]: list.color }}>
+      <header className="tile-head">
+        <h2><span className="list-icon tiny" style={{ background: list.color }} aria-hidden>{list.emoji}</span>{list.label} <span className="count">{data.need}</span></h2>
+        <div className="tile-actions">
+          <button className="icon-btn small" onClick={() => setAdding((x) => !x)} aria-label={`Add to ${list.label}`} aria-expanded={adding}><Plus size={15} /></button>
+          <button className="icon-btn small" onClick={() => setMenu((x) => !x)} aria-label={`${list.label} widget settings`} aria-expanded={menu}><MoreHorizontal size={15} /></button>
+          <Link to={`/lists/${list.slug}`} className="icon-btn small" aria-label={`Open full ${list.label} list`}><Maximize2 size={14} /></Link>
+        </div>
+      </header>
+      {menu && (
+        <div className="tile-menu">
+          <label>Show <select value={widget.max} onChange={(e) => onSave({ ...widget, max: Number(e.target.value) })} aria-label="Items shown">
+            {[3, 5, 8, 12].map((n) => <option key={n} value={n}>{n} items</option>)}
+          </select></label>
+          <label>Size <select value={widget.size} onChange={(e) => onSave({ ...widget, size: e.target.value as Widget['size'] })} aria-label="Widget size">
+            <option value="s">Small</option><option value="m">Medium</option><option value="l">Large</option>
+          </select></label>
+          <button className="link-btn" onClick={() => { setMenu(false); onSave({ ...widget, hidden: true }); }}>Hide</button>
+        </div>
+      )}
+      {adding && (
+        <form className="tile-add" onSubmit={(e) => { e.preventDefault(); add(); }}>
+          <input autoFocus value={title} onChange={(e) => setTitle(e.target.value)} placeholder={`Add to ${list.short}…`} aria-label={`New ${list.label} item`} />
+          <button type="button" className={`icon-btn small lock-toggle ${locked ? 'on' : ''}`} onClick={() => setLocked((x) => !x)} aria-pressed={locked} aria-label={locked ? 'Private' : 'Shared'} title={locked ? 'Private: only you' : `Shared with ${me.partner?.display_name ?? 'partner'}`}>
+            {locked ? <Lock size={13} /> : <LockOpen size={13} />}
+          </button>
+          <button className="btn small primary" disabled={!title.trim() || busy}>Add</button>
+        </form>
+      )}
+      {data.items.length ? (
+        <ul className="items compact">{data.items.map((i) => <ItemRow key={i.id} item={i} compact onCheck={() => purchase(i)} />)}</ul>
+      ) : <p className="muted small tile-empty">Nothing needed.</p>}
+      {data.need > data.items.length && <Link to={`/lists/${list.slug}`} className="tile-more">+{data.need - data.items.length} more</Link>}
     </section>
   );
 }
 
-export function DashboardPage() {
-  const me = useMe();
-  const { data } = useApi<any>('/dashboard');
+function ImportantDates({ events, today }: { events: any[]; today: string }) {
   const open = useOpen();
-  const { run } = useAction();
-  const [quick, setQuick] = useState('');
-  if (!data) return <div className="page"><Loading /></div>;
-  const show = (s: string) => data.sections.includes(s);
-  const hour = new Date().getHours();
-  const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
-  const addNeed = () => run(async () => { await api.post('/spaces/us/items', { module: 'grocery', title: quick, grocery_state: 'need' }); setQuick(''); emitChange(); }, 'Added to US groceries');
-
+  const daysUntil = (d: string) => Math.round((Date.parse(d) - Date.parse(today)) / 86400000);
   return (
-    <div className="page">
-      <header className="page-head">
-        <div>
-          <h1>{greeting}, {me.user.display_name}</h1>
-          <p className="muted">{day(data.today, { weekday: 'long', day: 'numeric', month: 'long' })}</p>
-        </div>
-        <Link to="/settings#dashboard" className="btn small ghost">Customize</Link>
+    <section className="tile">
+      <header className="tile-head">
+        <h2><CalendarHeart size={16} /> Important dates</h2>
+        <Link to="/calendar" className="icon-btn small" aria-label="Open calendar"><Maximize2 size={14} /></Link>
       </header>
+      {events.length ? (
+        <ul className="dates">
+          {events.map((e) => {
+            const n = daysUntil(e.start_date);
+            return (
+              <li key={e.id + e.start_date}>
+                <button className="date-row" onClick={() => open('event', e.id)}>
+                  <span className="date-badge"><small>{day(e.start_date, { month: 'short' })}</small><b>{Number(e.start_date.slice(8))}</b></span>
+                  <span className="grow">
+                    <span className="clamp1">{e.title}</span>
+                    <span className="muted tiny">{e.category ?? 'Event'}{e.years && /birthday/i.test(e.category ?? '') ? ` · turns ${e.years}` : e.years ? ` · ${e.years} years` : ''}</span>
+                  </span>
+                  <span className={`days-until ${n <= 7 ? 'soon' : ''}`}>{n === 0 ? 'Today' : n === 1 ? 'Tomorrow' : `${n} days`}</span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      ) : <p className="muted small tile-empty">No birthdays or social events in the next four months. Add one in the calendar with the category “Birthday” or “Social”.</p>}
+    </section>
+  );
+}
 
-      <div className="dash-grid">
-        {show('today') && (
-          <Section title="Today in US" icon={<CalendarDays size={18} />} action={<Link to="/calendar" className="small">Calendar</Link>}>
-            {data.today_events.length ? (
-              <ul className="rows">{data.today_events.map((e: any) => (
-                <li key={e.id}><button className="row-btn" onClick={() => open('event', e.id)}><span className="time">{eventTime(e)}</span><span className="grow">{e.title}</span></button></li>
-              ))}</ul>
-            ) : <p className="muted small">Nothing shared on the calendar today.</p>}
-          </Section>
-        )}
-
-        {show('need') && (
-          <Section title="We need" icon={<ShoppingBasket size={18} />} action={<Link to="/us/groceries" className="small">Groceries</Link>}>
-            <form className="quick-add" onSubmit={(e) => { e.preventDefault(); if (quick.trim()) addNeed(); }}>
-              <input value={quick} onChange={(e) => setQuick(e.target.value)} placeholder="Add to US groceries…" aria-label="Add grocery item" />
-              <button className="btn small primary" disabled={!quick.trim()}>Add</button>
-            </form>
-            {data.need.length ? (
-              <ul className="rows">{data.need.map((i: any) => (
-                <li key={i.id}>
-                  <button className="check-btn" aria-label={`Mark ${i.title} purchased`} onClick={() => run(async () => { await api.post(`/items/${i.id}/purchase`, {}); emitChange(); }, `${i.title} → STOCK`)}><Check size={14} /></button>
-                  <button className="row-btn" onClick={() => open('item', i.id)}><PriorityDot p={i.priority} /><span className="grow">{i.title}</span><span className="muted small">{qty(i.quantity, i.unit)}</span><SpaceTag space={i.space} /></button>
-                </li>
-              ))}</ul>
-            ) : <p className="muted small">The NEED list is empty.</p>}
-          </Section>
-        )}
-
-        {show('reminders') && (
-          <Section title="Reminders & due soon" icon={<ListChecks size={18} />} action={<Link to="/us/tasks" className="small">Tasks</Link>}>
-            {data.reminders.length ? (
-              <ul className="rows">{data.reminders.map((t: any) => (
-                <li key={t.id}><button className="row-btn" onClick={() => open('task', t.id)}><PriorityDot p={t.priority} /><span className="grow">{t.title}</span><span className="muted small">{t.due_date ? day(t.due_date) : ''}</span><SpaceTag space={t.space} /></button></li>
-              ))}</ul>
-            ) : <p className="muted small">Nothing due in the next few days.</p>}
-          </Section>
-        )}
-
-        {show('assigned') && (
-          <Section title="Who’s doing what" icon={<ListChecks size={18} />}>
-            <div className="split">
-              <div>
-                <h3>ME · {me.user.display_name}</h3>
-                {data.assigned.me.length ? <ul className="rows">{data.assigned.me.map((t: any) => <li key={t.id}><button className="row-btn" onClick={() => open('task', t.id)}><span className="grow">{t.title}</span>{t.assignee === 'both' && <span className="pill tiny">both</span>}</button></li>)}</ul> : <p className="muted small">Nothing assigned.</p>}
-              </div>
-              {me.partner && (
-                <div>
-                  <h3>YOU · {me.partner.display_name}</h3>
-                  {data.assigned.partner.length ? <ul className="rows">{data.assigned.partner.map((t: any) => <li key={t.id}><button className="row-btn" onClick={() => open('task', t.id)}><span className="grow">{t.title}</span>{t.assignee === 'both' && <span className="pill tiny">both</span>}</button></li>)}</ul> : <p className="muted small">Nothing assigned.</p>}
-                </div>
-              )}
-            </div>
-          </Section>
-        )}
-
-        {show('awaiting') && (
-          <Section title="Waiting for your opinion" icon={<Sparkles size={18} />}>
-            {data.awaiting.length || data.unread_threads.length ? (
-              <ul className="rows">
-                {data.awaiting.map((i: any) => <li key={i.id}><button className="row-btn" onClick={() => open('item', i.id)}><span className="grow">{i.title}</span><span className="muted small">{i.created_by_name} · {i.decision_status}</span></button></li>)}
-                {data.unread_threads.map((t: any) => <li key={t.entity_id}><button className="row-btn" onClick={() => open(t.entity_type, t.entity_id)}><MessageCircle size={14} /><span className="grow">New messages</span><b className="badge inline">{t.unread}</b></button></li>)}
-              </ul>
-            ) : <p className="muted small">You’re all caught up.</p>}
-          </Section>
-        )}
-
-        {show('upcoming') && (
-          <Section title="Coming up" icon={<CalendarDays size={18} />}>
-            {data.upcoming.length ? (
-              <ul className="rows">{data.upcoming.map((e: any) => (
-                <li key={e.id}><button className="row-btn" onClick={() => open('event', e.id)}><span className="time">{day(e.start_date, { weekday: 'short', day: 'numeric' })}</span><span className="grow">{e.title}</span><SpaceTag space={e.space} /></button></li>
-              ))}</ul>
-            ) : <p className="muted small">Nothing in the next two weeks.</p>}
-          </Section>
-        )}
-
-        {show('recent') && (
-          <Section title="Recently in US" icon={<Sparkles size={18} />}>
-            {data.recent.length ? (
-              <ul className="rows">{data.recent.map((r: any, i: number) => (
-                <li key={i}><button className="row-btn" onClick={() => r.entity_type !== 'receipt' && open(r.entity_type, r.entity_id)}><span className="grow"><b>{r.actor_name}</b> {r.summary}</span><span className="muted small">{relative(r.created_at)}</span></button></li>
-              ))}</ul>
-            ) : <Empty title="Nothing shared yet">Add something to US, or share from your private space.</Empty>}
-          </Section>
-        )}
-      </div>
-    </div>
+function Todos({ todos, items, today }: { todos: any[]; items: any[]; today: string }) {
+  const me = useMe();
+  const open = useOpen();
+  const purchase = usePurchase();
+  const { run, busy } = useAction();
+  const [title, setTitle] = useState('');
+  const [locked, setLocked] = useState(false);
+  const rows = [
+    ...todos.map((t) => ({ kind: 'task' as const, id: t.id, title: t.title, date: t.due_date, time: t.due_time, who: t.assignee === 'both' ? 'Both' : t.assignee === 'user' ? (t.assigned_user_id === me.user.id ? 'You' : me.partner?.display_name) : null, private: t.space === 'me', raw: t })),
+    ...items.map((i) => ({ kind: 'item' as const, id: i.id, title: i.title, date: i.due_date, time: i.due_time, who: null, private: i.private, raw: i })),
+  ].sort((a, b) => (a.date ?? '9999') < (b.date ?? '9999') ? -1 : (a.date ?? '9999') > (b.date ?? '9999') ? 1 : 0);
+  const add = () => title.trim() && run(async () => {
+    await api.post(`/spaces/${locked ? 'me' : 'us'}/tasks`, { title: title.trim() });
+    setTitle('');
+    emitChange();
+  });
+  const done = (r: (typeof rows)[number]) => r.kind === 'task'
+    ? run(async () => { await api.patch(`/tasks/${r.id}`, { status: 'completed' }); emitChange(); }, `Done: ${r.title}`)
+    : purchase(r.raw);
+  return (
+    <section className="tile">
+      <header className="tile-head"><h2><Check size={16} /> To do &amp; reminders</h2></header>
+      <form className="tile-add" onSubmit={(e) => { e.preventDefault(); add(); }}>
+        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Add a to-do…" aria-label="New to-do" />
+        <button type="button" className={`icon-btn small lock-toggle ${locked ? 'on' : ''}`} onClick={() => setLocked((x) => !x)} aria-pressed={locked} aria-label={locked ? 'Private' : 'Shared'}>{locked ? <Lock size={13} /> : <LockOpen size={13} />}</button>
+        <button className="btn small primary" disabled={!title.trim() || busy}>Add</button>
+      </form>
+      {rows.length ? (
+        <ul className="todo-list">
+          {rows.slice(0, 10).map((r) => (
+            <li key={r.kind + r.id}>
+              <button className="circle" onClick={() => done(r)} aria-label={`Done: ${r.title}`}><Check size={12} /></button>
+              <button className="item-main" onClick={() => open(r.kind, r.id)}>
+                <span className="item-title">{r.title}</span>
+                <span className="item-meta">
+                  {r.date && <span className={r.date < today ? 'overdue' : r.date === today ? 'today' : ''}>{dueLabel(r.date, r.time, today)}</span>}
+                  {r.who && <span>{r.who}</span>}
+                  {r.kind === 'item' && <span>{LISTS.find((l) => l.module === r.raw.module)?.short}</span>}
+                </span>
+              </button>
+              {r.private && <Lock size={12} className="muted" aria-label="Private" />}
+            </li>
+          ))}
+        </ul>
+      ) : <p className="muted small tile-empty">Nothing to do. Items with a date show up here too.</p>}
+    </section>
   );
 }

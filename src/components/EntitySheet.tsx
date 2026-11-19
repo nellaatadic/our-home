@@ -11,6 +11,7 @@ import { EventForm, InventoryForm, ItemForm, TaskForm, DECISIONS, STAGES, TASK_S
 import { ExportDialog } from './ExportDialog';
 import { Confirm, ErrorNote, Loading, PriorityDot, Segmented, Sheet, SpaceTag, useAction, useToast } from './ui';
 import type { OpenType } from './Layout';
+import { ItemSheet } from './ItemSheet';
 
 const REACTIONS = [['love', '❤️', 'Love it'], ['yes', '👍', 'In favour'], ['unsure', '🤔', 'Unsure'], ['no', '👎', 'Not keen']] as const;
 
@@ -91,7 +92,7 @@ function Tabs({ tab, setTab, unread, total, hideDiscussion }: { tab: string; set
   );
 }
 
-function History({ type, id }: { type: string; id: string }) {
+export function History({ type, id }: { type: string; id: string }) {
   const { data } = useApi<{ activity: any[] }>(`/entities/${type}/${id}/activity`);
   if (!data) return <Loading />;
   if (!data.activity.length) return <p className="muted">No history yet.</p>;
@@ -102,7 +103,7 @@ function History({ type, id }: { type: string; id: string }) {
   );
 }
 
-function Images({ entityType, entity, reload }: { entityType: string; entity: any; reload: () => void }) {
+export function Images({ entityType, entity, reload }: { entityType: string; entity: any; reload: () => void }) {
   const { run, busy } = useAction();
   const imgs = (entity.images ?? entity.attachments ?? []).filter((a: any) => !a.content_type || a.content_type.startsWith('image/'));
   const files = (entity.attachments ?? []).filter((a: any) => a.content_type && !a.content_type.startsWith('image/'));
@@ -134,117 +135,6 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
   return <div className="kv"><span>{label}</span><div>{children}</div></div>;
 }
 
-// ------------------------------------------------------------------- item
-function ItemDetail({ id, onClose }: { id: string; onClose: () => void }) {
-  const me = useMe();
-  const { data, error, reload } = useApi<{ item: any; alternatives: any[] }>(`/items/${id}`);
-  const [tab, setTab] = useState<'details' | 'discussion' | 'history'>('details');
-  const [editing, setEditing] = useState(false);
-  const [buying, setBuying] = useState<number | null>(null);
-  const [compare, setCompare] = useState(false);
-  const { run } = useAction();
-  if (error) return <Sheet title="Not available" onClose={onClose}><ErrorNote error={error} /></Sheet>;
-  if (!data) return <Sheet title="Loading…" onClose={onClose}><Loading /></Sheet>;
-  const it = data.item;
-  const label = it.module === 'grocery' ? (it.grocery_state === 'need' ? 'NEED' : 'STOCK') : it.module === 'home' ? 'Home improvement' : it.idea_type || null;
-  const after = () => { reload(); emitChange(); };
-  return (
-    <Sheet wide onClose={onClose} title={<span className="row gap-s"><SpaceTag space={it.space} /> {it.title}</span>}>
-      <Provenance e={it} />
-      <Tabs tab={tab} setTab={setTab} unread={it.thread.unread} total={it.thread.total} />
-      {tab === 'details' && (editing ? (
-        <ItemForm item={it} module={it.module} space={it.space} onCancel={() => setEditing(false)} onSaved={() => { setEditing(false); after(); }} />
-      ) : (
-        <div className="stack">
-          <div className="detail-head">
-            {label && <span className="pill">{label}</span>}
-            <span className="row gap-s"><PriorityDot p={it.priority} /> {it.priority}</span>
-            {it.category && <span className="cat" style={{ ['--c' as any]: it.category.color }}>{it.category.name}</span>}
-            {it.decision_status && <span className={`status st-${it.decision_status}`}>{DECISIONS.find(([v]) => v === it.decision_status)?.[1]}</span>}
-            {it.purchase_stage && <span className="pill">{STAGES.find(([v]) => v === it.purchase_stage)?.[1]}</span>}
-          </div>
-          {it.module !== 'grocery' && it.space === 'us' && <Reactions type="item" entity={it} onChange={reload} />}
-          <Images entityType="item" entity={{ ...it, attachments: it.attachments }} reload={reload} />
-          {it.link_image_url && !it.images.length && <img className="link-thumb" src={it.link_image_url} alt="" referrerPolicy="no-referrer" />}
-          <div className="kvs">
-            <Row label="Quantity">{qty(it.quantity, it.unit)}</Row>
-            <Row label="Price">{money(it.price_cents, it.currency ?? me.household.currency)}</Row>
-            <Row label="Link">{it.link_url && <a href={it.link_url} target="_blank" rel="noreferrer noopener">{it.link_title || new URL(it.link_url).hostname} <ExternalLink size={12} /></a>}</Row>
-            <Row label="Room">{it.room}</Row>
-            <Row label="Dimensions">{it.dimensions}</Row>
-            <Row label="Colour / material">{it.color_material}</Row>
-            <Row label="Store">{it.store}</Row>
-            <Row label="For">{it.intended_for_user_id ? me.members.find((m) => m.id === it.intended_for_user_id)?.display_name : it.intended_for_name}</Row>
-            <Row label="Assigned to">{it.assigned_to && me.members.find((m) => m.id === it.assigned_to)?.display_name}</Row>
-            <Row label="Target date">{it.target_date && day(it.target_date)}</Row>
-            <Row label="Purchased">{it.purchased_on && day(it.purchased_on)}</Row>
-            <Row label="Expires">{it.expires_on && day(it.expires_on)}</Row>
-            <Row label="Stored in">{it.storage_location}</Row>
-            <Row label="Tags">{it.tags.length > 0 && it.tags.map((t: string) => <span key={t} className="chip">{t}</span>)}</Row>
-            <Row label="List">{it.list?.name}</Row>
-            <Row label="Added">{`${it.created_by_name ?? ''} · ${relative(it.created_at)}`}</Row>
-          </div>
-          {it.notes && <p className="prose pre">{it.notes}</p>}
-
-          {it.module === 'grocery' && it.grocery_state === 'need' && (
-            buying === null ? <button className="btn primary" onClick={() => setBuying(it.quantity ?? 1)}>Mark purchased → STOCK</button> : (
-              <div className="row gap-s inline-form">
-                <label>Quantity bought <input type="number" min={0} step="any" className="qty-input" value={buying} onChange={(e) => setBuying(Number(e.target.value))} /></label>
-                <button className="btn primary" onClick={() => run(async () => { await api.post(`/items/${it.id}/purchase`, { quantity: buying }); after(); setBuying(null); }, 'Moved to STOCK')}>Move to STOCK</button>
-                <button className="btn ghost" onClick={() => setBuying(null)}>Cancel</button>
-              </div>
-            )
-          )}
-          {it.module === 'grocery' && it.grocery_state === 'stock' && (
-            <button className="btn" onClick={() => run(async () => { await api.post(`/items/${it.id}/need`, {}); after(); }, 'Back on the NEED list')}><Undo2 size={14} /> We ran out → NEED</button>
-          )}
-
-          {it.module !== 'grocery' && (
-            <div className="compare">
-              <div className="row between"><h3>Alternatives</h3><button className="btn small ghost" onClick={() => setCompare(true)}>Compare with…</button></div>
-              {data.alternatives.length > 0 ? (
-                <div className="compare-grid">
-                  {[it, ...data.alternatives].map((x: any) => (
-                    <div key={x.id} className={`compare-card ${x.purchase_stage === 'preferred' ? 'preferred' : ''}`}>
-                      {x.images?.[0] ? <img src={x.images[0].url} alt="" /> : x.link_image_url ? <img src={x.link_image_url} alt="" referrerPolicy="no-referrer" /> : <div className="img-ph" />}
-                      <b>{x.title}</b>
-                      <span>{money(x.price_cents, x.currency ?? me.household.currency)}</span>
-                      {x.dimensions && <span className="muted small">{x.dimensions}</span>}
-                      {x.link_url && <a href={x.link_url} target="_blank" rel="noreferrer noopener" className="small">Link</a>}
-                      {x.notes && <span className="small muted clamp">{x.notes}</span>}
-                      <span className="small muted">{x.thread?.total ?? 0} comments · {x.reactions?.map((r: any) => REACTIONS.find(([k]) => k === r.reaction)?.[1]).join(' ')}</span>
-                      {x.purchase_stage === 'preferred' ? <span className="pill">Preferred</span> : <button className="btn small ghost" onClick={() => run(async () => { await api.post(`/items/${x.id}/prefer`); after(); })}>Prefer this</button>}
-                    </div>
-                  ))}
-                </div>
-              ) : <p className="muted small">Add other options to compare them side by side.</p>}
-            </div>
-          )}
-          <div className="row gap-s"><button className="btn small" onClick={() => setEditing(true)}><Pencil size={14} /> Edit</button></div>
-          <CommonActions type="item" entity={it} onDone={onClose} reload={reload} />
-          {compare && <CompareChooser item={it} onClose={() => setCompare(false)} onChosen={after} />}
-        </div>
-      ))}
-      {tab === 'discussion' && <Thread type="item" id={it.id} space={it.space} />}
-      {tab === 'history' && <History type="item" id={it.id} />}
-    </Sheet>
-  );
-}
-
-function CompareChooser({ item, onClose, onChosen }: { item: any; onClose: () => void; onChosen: () => void }) {
-  const { data } = useApi<{ items: any[] }>(`/spaces/${item.space}/items?module=${item.module}`);
-  const { run } = useAction();
-  const options = (data?.items ?? []).filter((x) => x.id !== item.id && (!item.comparison_group_id || x.comparison_group_id !== item.comparison_group_id));
-  return (
-    <Sheet title={`Compare “${item.title}” with…`} onClose={onClose}>
-      {!data ? <Loading /> : options.length ? (
-        <ul className="pick-list">{options.map((o) => <li key={o.id}><button className="link-btn" onClick={() => run(async () => { await api.post(`/items/${item.id}/compare`, { other_id: o.id }); onChosen(); onClose(); })}>{o.title} <span className="muted">{o.room ?? ''}</span></button></li>)}</ul>
-      ) : <p className="muted">Add another item in this list first.</p>}
-    </Sheet>
-  );
-}
-
-// ------------------------------------------------------------------- task
 function TaskDetail({ id, onClose }: { id: string; onClose: () => void }) {
   const me = useMe();
   const { data, error, reload } = useApi<{ task: any }>(`/tasks/${id}`);
@@ -394,8 +284,8 @@ function InventoryDetail({ id, onClose }: { id: string; onClose: () => void }) {
   );
 }
 
-export function EntitySheet({ type, id, onClose }: { type: OpenType; id: string; onClose: () => void }) {
-  if (type === 'item') return <ItemDetail id={id} onClose={onClose} />;
+export function EntitySheet({ type, id, onClose, chat }: { type: OpenType; id: string; onClose: () => void; chat?: boolean }) {
+  if (type === 'item') return <ItemSheet id={id} onClose={onClose} startInChat={chat} />;
   if (type === 'task') return <TaskDetail id={id} onClose={onClose} />;
   if (type === 'event') return <EventDetail id={id} onClose={onClose} />;
   if (type === 'inventory') return <InventoryDetail id={id} onClose={onClose} />;

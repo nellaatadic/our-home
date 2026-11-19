@@ -9,8 +9,6 @@ import { dispatchDueReminders, logActivity } from '../lib/notify.js';
 import { addDays, todayIn } from '../lib/time.js';
 import { ROOMS } from '../lib/defaults.js';
 import { serializeItems } from './items.js';
-import { serializeTasks } from './tasks.js';
-import { serializeEvents } from './events.js';
 
 export const householdModuleRoutes = new Hono<AppEnv>();
 
@@ -292,80 +290,4 @@ householdModuleRoutes.get('/archive', async (c) => {
     [wss],
   );
   return c.json({ archived: rows.map((r: any) => ({ ...r, space: r.workspace_id === a.sharedWorkspaceId ? 'us' : 'me' })) });
-});
-
-// --------------------------------------------------------------- dashboard
-householdModuleRoutes.get('/dashboard', async (c) => {
-  const a = requireAuth(c);
-  await dispatchDueReminders(a.household.id);
-  const tz = a.household.timezone;
-  const today = todayIn(tz);
-  const wss = accessibleWorkspaceIds(a);
-  const settings = await q1<any>('SELECT dashboard_sections FROM user_settings WHERE user_id = $1', [a.user.id]);
-  const partner = a.partner?.id ?? '00000000-0000-0000-0000-000000000000';
-  const [todayEvents, upcoming, need, reminders, assigned, awaiting, recent] = await Promise.all([
-    q(`SELECT * FROM events WHERE workspace_id = $1 AND archived_at IS NULL AND start_date <= $2 AND COALESCE(end_date, start_date) >= $2 ORDER BY all_day DESC, starts_at`, [a.sharedWorkspaceId, today]),
-    q(`SELECT * FROM events WHERE workspace_id = ANY($1::uuid[]) AND archived_at IS NULL AND start_date > $2 AND start_date <= $3 ORDER BY start_date, starts_at LIMIT 8`, [wss, today, addDays(today, 14)]),
-    q(`SELECT * FROM items WHERE workspace_id = ANY($1::uuid[]) AND module = 'grocery' AND grocery_state = 'need' AND archived_at IS NULL
-        ORDER BY array_position(ARRAY['urgent','high','normal','low'], priority), created_at DESC LIMIT 12`, [wss]),
-    q(`SELECT * FROM tasks WHERE workspace_id = ANY($1::uuid[]) AND archived_at IS NULL AND status NOT IN ('completed','archived')
-        AND (due_date <= $2 OR (reminder_at IS NOT NULL AND reminder_at <= now() + interval '2 days') OR priority = 'urgent')
-        ORDER BY due_date NULLS LAST LIMIT 10`, [wss, addDays(today, 3)]),
-    q(`SELECT * FROM tasks WHERE workspace_id = $1 AND archived_at IS NULL AND status NOT IN ('completed','archived') AND assignee <> 'none'
-        ORDER BY due_date NULLS LAST, created_at DESC LIMIT 20`, [a.sharedWorkspaceId]),
-    q(`SELECT i.* FROM items i WHERE i.workspace_id = $1 AND i.archived_at IS NULL AND i.module <> 'grocery'
-        AND i.decision_status IN ('idea','considering','discussing')
-        AND NOT EXISTS (SELECT 1 FROM reactions r WHERE r.entity_type = 'item' AND r.entity_id = i.id AND r.user_id = $2)
-        AND i.created_by IS DISTINCT FROM $2 ORDER BY i.created_at DESC LIMIT 8`, [a.sharedWorkspaceId, a.user.id]),
-    q(`SELECT ac.entity_type, ac.entity_id, ac.summary, ac.created_at, u.display_name AS actor_name FROM activity ac LEFT JOIN users u ON u.id = ac.actor_id
-        WHERE ac.workspace_id = $1 ORDER BY ac.created_at DESC LIMIT 10`, [a.sharedWorkspaceId]),
-  ]);
-  const unreadThreads = await q(
-    `SELECT t.entity_type, t.entity_id, count(*)::int AS unread FROM threads t JOIN messages m ON m.thread_id = t.id
-       LEFT JOIN thread_reads r ON r.thread_id = t.id AND r.user_id = $1
-      WHERE t.workspace_id = $2 AND m.author_id IS DISTINCT FROM $1 AND m.deleted_at IS NULL AND m.created_at > COALESCE(r.last_read_at, 'epoch')
-      GROUP BY t.entity_type, t.entity_id LIMIT 10`,
-    [a.user.id, a.sharedWorkspaceId],
-  );
-  const assignedTasks = await serializeTasks(a, assigned);
-  return c.json({
-    today,
-    sections: settings?.dashboard_sections ?? [],
-    today_events: await serializeEvents(a, todayEvents),
-    upcoming: await serializeEvents(a, upcoming),
-    need: await serializeItems(a, need),
-    reminders: await serializeTasks(a, reminders),
-    assigned: {
-      me: assignedTasks.filter((t: any) => t.assigned_user_id === a.user.id || t.assignee === 'both'),
-      partner: assignedTasks.filter((t: any) => t.assigned_user_id === partner || t.assignee === 'both'),
-    },
-    awaiting: await serializeItems(a, awaiting),
-    unread_threads: unreadThreads,
-    recent,
-  });
-});
-
-/**
- * The YOU view: what the partner has contributed to or is responsible for in
- * US. Their private space is never queried here.
- */
-householdModuleRoutes.get('/partner', async (c) => {
-  const a = requireAuth(c);
-  if (!a.partner) return c.json({ partner: null });
-  const p = a.partner.id;
-  const ws = a.sharedWorkspaceId;
-  const today = todayIn(a.household.timezone);
-  const [items, forThem, tasks, events] = await Promise.all([
-    q(`SELECT * FROM items WHERE workspace_id = $1 AND archived_at IS NULL AND (created_by = $2 OR shared_by = $2) ORDER BY updated_at DESC LIMIT 30`, [ws, p]),
-    q(`SELECT * FROM items WHERE workspace_id = $1 AND archived_at IS NULL AND (intended_for_user_id = $2 OR assigned_to = $2) ORDER BY updated_at DESC LIMIT 30`, [ws, p]),
-    q(`SELECT * FROM tasks WHERE workspace_id = $1 AND archived_at IS NULL AND status NOT IN ('completed','archived') AND ((assignee = 'user' AND assigned_user_id = $2) OR assignee = 'both') ORDER BY due_date NULLS LAST`, [ws, p]),
-    q(`SELECT * FROM events WHERE workspace_id = $1 AND archived_at IS NULL AND start_date >= $3 AND (imported_by = $2 OR created_by = $2 OR for_user_id = $2) ORDER BY start_date, starts_at LIMIT 30`, [ws, p, today]),
-  ]);
-  return c.json({
-    partner: { id: a.partner.id, display_name: a.partner.display_name },
-    contributed: await serializeItems(a, items),
-    for_them: await serializeItems(a, forThem),
-    tasks: await serializeTasks(a, tasks),
-    events: await serializeEvents(a, events),
-  });
 });

@@ -43,22 +43,23 @@ export function useAction() {
 }
 
 // ------------------------------------------------------------------ sheet
-export function Sheet({ title, onClose, children, wide, footer }: { title: ReactNode; onClose: () => void; children: ReactNode; wide?: boolean; footer?: ReactNode }) {
+export function Sheet({ title, onClose, children, wide, footer, compact }: { title: ReactNode; onClose: () => void; children: ReactNode; wide?: boolean; footer?: ReactNode; compact?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     document.addEventListener('keydown', onKey);
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-    ref.current?.focus();
+    // Keep focus on a field the content focused itself (e.g. a chat box); otherwise focus the dialog.
+    requestAnimationFrame(() => { if (!ref.current?.contains(document.activeElement)) ref.current?.focus(); });
     return () => {
       document.removeEventListener('keydown', onKey);
       document.body.style.overflow = prev;
     };
   }, [onClose]);
   return (
-    <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className={`sheet ${wide ? 'wide' : ''}`} role="dialog" aria-modal="true" aria-label={typeof title === 'string' ? title : undefined} tabIndex={-1} ref={ref}>
+    <div className={`overlay ${compact ? 'centered' : ''}`} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className={`sheet ${wide ? 'wide' : ''} ${compact ? 'compact' : ''}`} role="dialog" aria-modal="true" aria-label={typeof title === 'string' ? title : undefined} tabIndex={-1} ref={ref}>
         <header className="sheet-head">
           <h2>{title}</h2>
           <button className="icon-btn" onClick={onClose} aria-label="Close"><X size={18} /></button>

@@ -4,8 +4,9 @@ import { Layout } from './components/Layout';
 import { Loading } from './components/ui';
 import { LoginPage, RegisterPage, InvitePage } from './pages/Auth';
 import { DashboardPage } from './pages/Dashboard';
-import { SpacePage } from './pages/Space';
-import { PartnerPage } from './pages/Partner';
+import { ListPage } from './pages/Lists';
+import { ChatPage } from './pages/Chat';
+import { DataPage } from './pages/Data';
 import { CalendarPage } from './pages/Calendar';
 import { ConnectionsPage } from './pages/Connections';
 import { NotificationsPage } from './pages/Notifications';
@@ -32,11 +33,14 @@ export function App() {
     <Layout>
       <Routes>
         <Route path="/" element={<DashboardPage />} />
-        <Route path="/me" element={<Navigate to="/me/groceries" replace />} />
-        <Route path="/us" element={<Navigate to="/us/groceries" replace />} />
-        <Route path="/me/:module" element={<SpacePage space="me" />} />
-        <Route path="/us/:module" element={<SpacePage space="us" />} />
-        <Route path="/you" element={<PartnerPage />} />
+        <Route path="/lists/:slug" element={<ListPage />} />
+        <Route path="/lists" element={<Navigate to="/lists/groceries" replace />} />
+        <Route path="/chat" element={<ChatPage />} />
+        <Route path="/data" element={<DataPage />} />
+        {/* Old addresses from before the redesign */}
+        <Route path="/me/*" element={<Navigate to="/lists/groceries" replace />} />
+        <Route path="/us/*" element={<Navigate to="/lists/groceries" replace />} />
+        <Route path="/you" element={<Navigate to="/chat" replace />} />
         <Route path="/calendar" element={<CalendarPage />} />
         <Route path="/calendar/connections" element={<ConnectionsPage />} />
         <Route path="/receipts/:id" element={<ReceiptPage />} />

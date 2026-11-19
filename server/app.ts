@@ -4,6 +4,10 @@ import { HttpError } from './lib/http.js';
 import { csrfMiddleware, sessionMiddleware } from './lib/auth.js';
 import type { AppEnv } from './lib/access.js';
 import { authRoutes, householdRoutes } from './routes/auth.js';
+import { listRoutes } from './routes/lists.js';
+import { chatRoutes } from './routes/chat.js';
+import { homeRoutes } from './routes/home.js';
+import { dataRoutes } from './routes/data.js';
 import { itemRoutes } from './routes/items.js';
 import { shareRoutes } from './routes/share.js';
 import { entityRoutes, threadRoutes } from './routes/threads.js';
@@ -37,7 +41,7 @@ export function createApp() {
 
   app.route('/auth', authRoutes);
   app.route('/household', householdRoutes);
-  for (const r of [itemRoutes, shareRoutes, threadRoutes, entityRoutes, attachmentRoutes, taskRoutes, eventRoutes, googleRoutes, receiptRoutes, householdModuleRoutes]) {
+  for (const r of [itemRoutes, listRoutes, chatRoutes, homeRoutes, dataRoutes, shareRoutes, threadRoutes, entityRoutes, attachmentRoutes, taskRoutes, eventRoutes, googleRoutes, receiptRoutes, householdModuleRoutes]) {
     app.route('/', r);
   }
 

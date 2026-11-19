@@ -147,7 +147,7 @@ threadRoutes.post('/threads/:type/:id/messages', async (c) => {
   mentioned.forEach((m) => replyRecipients.delete(m));
   replyRecipients.delete(a.user.id);
   if (replyRecipients.size) {
-    await notify({ recipients: [...replyRecipients], actorId: a.user.id, workspaceId: entity.workspace_id, type: 'reply', title: `${a.user.display_name} replied on “${title}”`, body: preview, entityType: type, entityId: entity.id, messageId: msg.id });
+    await notify({ recipients: [...replyRecipients], actorId: a.user.id, workspaceId: entity.workspace_id, type: 'reply', title: type === 'topic' ? `${a.user.display_name} wrote in “${title}”` : `${a.user.display_name} replied on “${title}”`, body: preview, entityType: type, entityId: entity.id, messageId: msg.id });
   }
   if (type === 'item' && entity.decision_status === 'idea' && entity.workspace_id === a.sharedWorkspaceId) {
     await q(`UPDATE items SET decision_status = 'discussing', updated_at = now() WHERE id = $1`, [entity.id]);

@@ -1,8 +1,8 @@
 # OUR HOME
 
-A private, shared household app for two people. Each person has a private space (**ME**), sees what their partner shares (**YOU**), and both work together in a shared space (**US**).
+A private household app for two people: three shared lists (Groceries, Home & Gadgets, Shopping & Other), a chat about every item, a calendar with both schedules, and a data page. Everything is shared between the two of you unless you lock it.
 
-Features: groceries with NEED / STOCK lists, home-improvement and idea lists with side-by-side comparison, tasks and recurring home maintenance, a calendar with Google Calendar import and export, events created from pasted text, receipt review, room-based inventory, shared expenses, a discussion thread on every record, notifications, search and an archive.
+Features: NEED / STOCK lists with sections, search and filters; Reminders-style item details (date, time, urgent, repeat, early reminder, subtasks, flag, priority, photos); a comment button on every item; a Chat page with conversation cards and one ongoing chat where you can @-link any card; a dashboard with list widgets, important dates, to-dos and today's schedule; day / week / month calendar with Google import and export and events from pasted text; receipt review; spending, grocery-habit and calendar-load charts; notifications, search and an archive. Defaults: Toronto time, Canadian dollars.
 
 - **Frontend:** React 19 + Vite (single-page app), responsive with a mobile tab bar
 - **API:** Hono running in one Netlify Function (`/api/*`), with a plain Node server for local development
@@ -25,7 +25,7 @@ Every record (item, task, event, inventory entry, expense, receipt, thread, atta
 
 The server works out the current user's two allowed workspace ids from their session. Every query filters on them in SQL (`WHERE workspace_id = ANY($allowed)`), so an id outside those workspaces looks the same as a missing one (HTTP 404). Notifications and @mentions only go to people who can already see the workspace, and search only looks inside the two allowed workspaces. The YOU page is built only from US data and never queries the partner's private space.
 
-**Sharing copies by default.** "Share with US" creates a copy in US and records where it came from (`origin_*_id`, `origin_owner_id`, `shared_at`, `shared_by`). The private original stays untouched, and later edits to it do not change the copy (the UI tells you when the two have drifted apart). Moving instead of copying is a separate, explicit choice. Duplicate detection stops the same item being shared twice and warns when a similar item already exists in US.
+**Shared unless locked.** New items, to-dos, events and topics go to US unless you tick the lock. Locking an item (only the person who added it can) moves it, with its chat, photos, subtasks, reactions and history, into that person's private workspace, and removes the partner's notifications and favourites for it. Unlocking moves it back. In a shared chat, the @ card picker only offers shared records. The partner's private calendar is never shown, except as anonymous "Busy" blocks if they turn that on in Settings (off by default).
 
 **Google events are copies too.** Imported events become OUR HOME events. Editing or deleting them never calls a Google write API: import uses read-only scopes and requests are re-read on the server. Export is a one-way `events.insert` into a calendar *you* choose. It needs explicit confirmation and is recorded in `event_exports`, which is what prevents duplicates.
 

@@ -8,7 +8,7 @@ const ICON: Record<string, React.ReactNode> = {
   mention: <AtSign size={16} />, reply: <MessageCircle size={16} />, shared: <Share2 size={16} />, assigned: <CheckSquare size={16} />,
   reminder: <Bell size={16} />, calendar: <CalendarDays size={16} />, decision: <Sparkles size={16} />,
 };
-const PATH: Record<string, string> = { item: '/us/groceries', task: '/us/tasks', event: '/calendar', inventory: '/us/inventory', expense: '/us/expenses' };
+const PATH: Record<string, string> = { item: '/', task: '/', event: '/calendar', inventory: '/', expense: '/data' };
 
 export function NotificationsPage() {
   const { data, reload } = useApi<{ notifications: any[]; unread: number }>('/notifications');
@@ -17,7 +17,9 @@ export function NotificationsPage() {
   const go = (n: any) => run(async () => {
     await api.post('/notifications/read', { ids: [n.id] });
     emitChange();
-    if (n.entity_type && n.entity_id) nav(`${PATH[n.entity_type] ?? '/'}?open=${n.entity_type}:${n.entity_id}`);
+    if (n.entity_type === 'topic') nav(`/chat?topic=${n.entity_id}`);
+    else if (n.entity_type && n.entity_id && (n.type === 'mention' || n.type === 'reply')) nav(`/chat?open=${n.entity_type}:${n.entity_id}:chat`);
+    else if (n.entity_type && n.entity_id) nav(`${PATH[n.entity_type] ?? '/'}?open=${n.entity_type}:${n.entity_id}`);
     else reload();
   });
   if (!data) return <div className="page"><Loading /></div>;

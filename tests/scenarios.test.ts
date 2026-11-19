@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { Client, household, resetDb } from './helpers.js';
+import { q } from '../server/db.js';
 
 beforeAll(resetDb);
 
@@ -223,9 +224,14 @@ describe('Scenario H — privacy enforcement at the API', () => {
     bad.set('entity_id', priv.id);
     bad.set('file', new File(['<script>alert(1)</script>'], 'x.png', { type: 'image/png' }));
     expect((await me.post('/attachments', bad)).status).toBe(415);
-    // categories from ME cannot be attached to US items
+    // the partner's private categories cannot be used at all
+    const theirCat = (await you.ok('GET', '/spaces/me/categories?module=home')).categories[0];
+    expect((await me.post('/spaces/us/items', { module: 'home', title: 'x', category_id: theirCat.id })).status).toBe(400);
+    // a category from my own ME is mapped to the same-named US category
     const myCat = (await me.ok('GET', '/spaces/me/categories?module=home')).categories[0];
-    expect((await me.post('/spaces/us/items', { module: 'home', title: 'x', category_id: myCat.id })).status).toBe(400);
+    const mapped = (await me.ok('POST', '/spaces/us/items', { module: 'home', title: 'y', category_id: myCat.id })).item;
+    expect(mapped.category.name).toBe(myCat.name);
+    expect(mapped.category.id).not.toBe(myCat.id);
   });
 });
 
@@ -241,7 +247,7 @@ describe('Archive, restore and confirmed deletion', () => {
     expect((await me.del(`/entities/item/${it1.id}`)).status).toBe(428);
     await me.ok('DELETE', `/entities/item/${it1.id}?confirm=permanent`);
     expect((await me.get(`/items/${it1.id}`)).status).toBe(404);
-    const hist = (await me.ok('GET', '/dashboard')).recent;
+    const hist = await q<any>(`SELECT summary FROM activity WHERE entity_id = $1`, [it1.id]);
     expect(hist.some((h: any) => /Permanently deleted/.test(h.summary))).toBe(true);
   });
 });

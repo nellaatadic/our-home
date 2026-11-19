@@ -235,7 +235,8 @@ export function EventForm({ event, initial, space: initialSpace, onSaved, onCanc
       title: f.title, date: f.date, end_date: f.end_date || null, all_day: Boolean(f.all_day), start_time: f.all_day ? null : f.start_time || null, end_time: f.all_day ? null : f.end_time || null,
       location: f.location ?? '', description: f.description ?? '', notes: f.notes ?? '', category: f.category || null, for_user_id: f.for_user_id || null,
       participants: String(f.participantsText ?? '').split(',').map((s: string) => s.trim()).filter(Boolean),
-      ...(event ? {} : { source_type: initial ? 'text' : 'manual' }),
+      yearly: Boolean(f.yearly),
+      ...(event ? {} : { source_type: initial?.from_text ? 'text' : 'manual' }),
     };
     const saved = event ? (await api.patch(`/events/${event.id}`, body)).event : (await api.post(`/spaces/${space}/events`, body)).event;
     onSaved(saved);
@@ -254,7 +255,11 @@ export function EventForm({ event, initial, space: initialSpace, onSaved, onCanc
           <Field label="End time"><input type="time" value={f.end_time ?? ''} onChange={(e) => set('end_time', e.target.value)} disabled={!f.start_time} /></Field>
         </>}
         <Field label="Location"><input value={f.location ?? ''} onChange={(e) => set('location', e.target.value)} maxLength={500} /></Field>
-        <Field label="Category"><input value={f.category ?? ''} onChange={(e) => set('category', e.target.value)} maxLength={60} placeholder="Social, Health, Work…" /></Field>
+        <Field label="Category" hint="Birthdays, anniversaries, social events and holidays show under Important dates">
+          <input list="event-categories" value={f.category ?? ''} onChange={(e) => { const v = e.target.value; setF((x: any) => ({ ...x, category: v, yearly: ['birthday', 'anniversary'].includes(v.toLowerCase()) ? true : x.yearly })); }} maxLength={60} placeholder="Birthday, Social, Health…" />
+          <datalist id="event-categories">{['Birthday', 'Anniversary', 'Social', 'Holiday', 'Important', 'Health', 'Work', 'Travel'].map((c) => <option key={c} value={c} />)}</datalist>
+        </Field>
+        <label className="check"><input type="checkbox" checked={Boolean(f.yearly)} onChange={(e) => set('yearly', e.target.checked)} /> Repeats every year</label>
         <Field label="Participants" hint="Comma separated"><input value={f.participantsText ?? ''} onChange={(e) => set('participantsText', e.target.value)} /></Field>
         <Field label="Who is this about?">
           <select value={f.for_user_id ?? ''} onChange={(e) => set('for_user_id', e.target.value || null)}>
@@ -263,13 +268,13 @@ export function EventForm({ event, initial, space: initialSpace, onSaved, onCanc
           </select>
         </Field>
         {chooseSpace && !event && (
-          <Field label="Calendar"><select value={space} onChange={(e) => setSpace(e.target.value as 'me' | 'us')}><option value="us">US (shared)</option><option value="me">ME (private)</option></select></Field>
+          <label className="check"><input type="checkbox" checked={space === 'me'} onChange={(e) => setSpace(e.target.checked ? 'me' : 'us')} /> Private: only I can see it</label>
         )}
       </div>
       <Field label="Description"><textarea value={f.description ?? ''} onChange={(e) => set('description', e.target.value)} rows={3} /></Field>
       <div className="row gap-s end">
         {onCancel && <button type="button" className="btn ghost" onClick={onCancel}>Cancel</button>}
-        <button className="btn primary" disabled={busy || !f.title.trim() || !f.date}>{event ? 'Save changes' : space === 'us' ? 'Save to US Calendar' : 'Save to my calendar'}</button>
+        <button className="btn primary" disabled={busy || !f.title.trim() || !f.date}>{event ? 'Save changes' : space === 'us' ? 'Save (shared)' : 'Save (private)'}</button>
       </div>
     </form>
   );
