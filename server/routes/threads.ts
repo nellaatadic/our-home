@@ -1,0 +1,286 @@
+import { Hono } from 'hono';
+import { z } from 'zod';
+import { q, q1 } from '../db.js';
+import { requireAuth } from '../lib/auth.js';
+import { canAccessWorkspace, ENTITY_TABLES, isEntityType, loadEntity, THREAD_ENTITY_TYPES, type AppEnv, type Auth, type ThreadEntityType } from '../lib/access.js';
+import { badRequest, forbidden, HttpError, notFound, parse, uuid } from '../lib/http.js';
+import { logActivity, notify } from '../lib/notify.js';
+import { getStorage } from '../lib/storage.js';
+
+/** One discussion thread per record. Access to a thread == access to its record. */
+export const threadRoutes = new Hono<AppEnv>();
+
+const ENTITY = z.enum(THREAD_ENTITY_TYPES);
+
+async function getOrCreateThread(workspaceId: string, type: ThreadEntityType, id: string) {
+  const existing = await q1<any>('SELECT * FROM threads WHERE entity_type = $1 AND entity_id = $2', [type, id]);
+  if (existing) {
+    // Keep workspace in sync if the record was moved between spaces.
+    if (existing.workspace_id !== workspaceId) await q('UPDATE threads SET workspace_id = $1 WHERE id = $2', [workspaceId, existing.id]);
+    return { ...existing, workspace_id: workspaceId };
+  }
+  return q1<any>(
+    `INSERT INTO threads (workspace_id, entity_type, entity_id) VALUES ($1,$2,$3)
+     ON CONFLICT (entity_type, entity_id) DO UPDATE SET workspace_id = EXCLUDED.workspace_id RETURNING *`,
+    [workspaceId, type, id],
+  );
+}
+
+/**
+ * Resolve @mentions to household members who can see this workspace.
+ * Supports @Name (display name, first word), @ME / @YOU (relative to the author).
+ */
+export function resolveMentions(a: Auth, body: string, audience: string[]): string[] {
+  const out = new Set<string>();
+  const tokens = [...body.matchAll(/@([\p{L}\p{N}_.-]{1,40})/gu)].map((m) => m[1].toLowerCase());
+  for (const t of tokens) {
+    if (t === 'me') out.add(a.user.id);
+    else if (t === 'you' && a.partner) out.add(a.partner.id);
+    else {
+      for (const m of a.members) {
+        const full = m.display_name.toLowerCase().replace(/\s+/g, '');
+        const first = m.display_name.toLowerCase().split(/\s+/)[0];
+        if (t === first || t === full) out.add(m.id);
+      }
+    }
+  }
+  return [...out].filter((u) => audience.includes(u));
+}
+
+async function serializeMessages(threadId: string) {
+  const rows = await q<any>(
+    `SELECT m.id, m.author_id, u.display_name AS author_name, m.reply_to_id, m.created_at, m.edited_at, m.deleted_at,
+            CASE WHEN m.deleted_at IS NULL THEN m.body ELSE '' END AS body,
+            COALESCE((SELECT array_agg(user_id) FROM mentions WHERE message_id = m.id), '{}') AS mention_ids
+       FROM messages m LEFT JOIN users u ON u.id = m.author_id
+      WHERE m.thread_id = $1 ORDER BY m.created_at`,
+    [threadId],
+  );
+  const atts = await q<any>(
+    `SELECT a.id, a.entity_id, a.filename, a.content_type, a.size_bytes FROM attachments a
+      WHERE a.entity_type = 'message' AND a.entity_id = ANY($1::uuid[])`,
+    [rows.map((r) => r.id)],
+  );
+  return rows.map((r) => ({
+    ...r,
+    attachments: r.deleted_at ? [] : atts.filter((x) => x.entity_id === r.id).map((x) => ({ ...x, url: `/api/attachments/${x.id}` })),
+  }));
+}
+
+threadRoutes.get('/threads/:type/:id', async (c) => {
+  const a = requireAuth(c);
+  const type = parse(ENTITY, c.req.param('type'));
+  const entity = await loadEntity<any>(a, type, c.req.param('id'));
+  const thread = await q1<any>('SELECT * FROM threads WHERE entity_type = $1 AND entity_id = $2', [type, entity.id]);
+  if (!thread) return c.json({ thread: null, messages: [], last_read_at: null });
+  const read = await q1<any>('SELECT last_read_at FROM thread_reads WHERE thread_id = $1 AND user_id = $2', [thread.id, a.user.id]);
+  return c.json({ thread, messages: await serializeMessages(thread.id), last_read_at: read?.last_read_at ?? null });
+});
+
+threadRoutes.post('/threads/:type/:id/read', async (c) => {
+  const a = requireAuth(c);
+  const type = parse(ENTITY, c.req.param('type'));
+  const entity = await loadEntity<any>(a, type, c.req.param('id'));
+  const thread = await q1<any>('SELECT id FROM threads WHERE entity_type = $1 AND entity_id = $2', [type, entity.id]);
+  if (thread) {
+    await q(
+      `INSERT INTO thread_reads (thread_id, user_id, last_read_at) VALUES ($1,$2,now())
+       ON CONFLICT (thread_id, user_id) DO UPDATE SET last_read_at = now()`,
+      [thread.id, a.user.id],
+    );
+    // Opening a conversation also clears its notifications.
+    await q(`UPDATE notifications SET read_at = now() WHERE user_id = $1 AND entity_type = $2 AND entity_id = $3 AND type IN ('mention','reply') AND read_at IS NULL`, [
+      a.user.id, type, entity.id,
+    ]);
+  }
+  return c.json({ ok: true });
+});
+
+threadRoutes.post('/threads/:type/:id/messages', async (c) => {
+  const a = requireAuth(c);
+  const type = parse(ENTITY, c.req.param('type'));
+  const entity = await loadEntity<any>(a, type, c.req.param('id'));
+  const b = parse(
+    z.object({
+      body: z.string().trim().max(5000),
+      reply_to_id: uuid.nullish(),
+      attachment_ids: z.array(uuid).max(5).optional(),
+    }),
+    await c.req.json(),
+  );
+  if (!b.body && !b.attachment_ids?.length) throw badRequest('Write a message or attach a file');
+  const thread = await getOrCreateThread(entity.workspace_id, type, entity.id);
+  let replyTo: any = null;
+  if (b.reply_to_id) {
+    replyTo = await q1<any>('SELECT id, author_id FROM messages WHERE id = $1 AND thread_id = $2', [b.reply_to_id, thread.id]);
+    if (!replyTo) throw badRequest('You can only reply to a message in this conversation');
+  }
+  const msg = await q1<any>('INSERT INTO messages (thread_id, author_id, body, reply_to_id) VALUES ($1,$2,$3,$4) RETURNING *', [
+    thread.id, a.user.id, b.body, replyTo?.id ?? null,
+  ]);
+  if (b.attachment_ids?.length) {
+    // Only the author's own, not-yet-attached pending uploads in this workspace.
+    await q(
+      `UPDATE attachments SET entity_type = 'message', entity_id = $1
+        WHERE id = ANY($2::uuid[]) AND uploaded_by = $3 AND workspace_id = $4 AND entity_type = 'message' AND entity_id = '00000000-0000-0000-0000-000000000000'`,
+      [msg.id, b.attachment_ids, a.user.id, entity.workspace_id],
+    );
+  }
+  await q(
+    `INSERT INTO thread_reads (thread_id, user_id, last_read_at) VALUES ($1,$2,now()) ON CONFLICT (thread_id, user_id) DO UPDATE SET last_read_at = now()`,
+    [thread.id, a.user.id],
+  );
+
+  const audience = entity.workspace_id === a.sharedWorkspaceId ? a.members.map((m) => m.id) : [a.user.id];
+  const mentioned = resolveMentions(a, b.body, audience).filter((u) => u !== a.user.id);
+  for (const u of mentioned) await q('INSERT INTO mentions (message_id, user_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [msg.id, u]);
+  const title = entity.title ?? entity.name ?? 'an item';
+  const preview = b.body.slice(0, 140);
+  if (mentioned.length) {
+    await notify({ recipients: mentioned, actorId: a.user.id, workspaceId: entity.workspace_id, type: 'mention', title: `${a.user.display_name} mentioned you on “${title}”`, body: preview, entityType: type, entityId: entity.id, messageId: msg.id });
+  }
+  // Replies: notify other participants of this conversation (and the record's creator) who weren't just mentioned.
+  const participants = await q<{ author_id: string }>('SELECT DISTINCT author_id FROM messages WHERE thread_id = $1 AND author_id IS NOT NULL', [thread.id]);
+  const replyRecipients = new Set<string>(participants.map((p) => p.author_id));
+  if (entity.created_by) replyRecipients.add(entity.created_by);
+  if (replyTo?.author_id) replyRecipients.add(replyTo.author_id);
+  mentioned.forEach((m) => replyRecipients.delete(m));
+  replyRecipients.delete(a.user.id);
+  if (replyRecipients.size) {
+    await notify({ recipients: [...replyRecipients], actorId: a.user.id, workspaceId: entity.workspace_id, type: 'reply', title: `${a.user.display_name} replied on “${title}”`, body: preview, entityType: type, entityId: entity.id, messageId: msg.id });
+  }
+  if (type === 'item' && entity.decision_status === 'idea' && entity.workspace_id === a.sharedWorkspaceId) {
+    await q(`UPDATE items SET decision_status = 'discussing', updated_at = now() WHERE id = $1`, [entity.id]);
+  }
+  const all = await serializeMessages(thread.id);
+  return c.json({ message: all.find((m) => m.id === msg.id) }, 201);
+});
+
+async function loadOwnMessage(a: Auth, id: string) {
+  const m = await q1<any>(
+    `SELECT m.*, t.workspace_id, t.entity_type, t.entity_id FROM messages m JOIN threads t ON t.id = m.thread_id WHERE m.id = $1`,
+    [parse(uuid, id)],
+  );
+  if (!m || !canAccessWorkspace(a, m.workspace_id)) throw notFound();
+  if (m.author_id !== a.user.id) throw forbidden('You can only change your own messages');
+  if (m.deleted_at) throw new HttpError(410, 'gone', 'This message was deleted');
+  return m;
+}
+
+threadRoutes.patch('/messages/:id', async (c) => {
+  const a = requireAuth(c);
+  const m = await loadOwnMessage(a, c.req.param('id'));
+  const b = parse(z.object({ body: z.string().trim().min(1).max(5000) }), await c.req.json());
+  await q('UPDATE messages SET body = $1, edited_at = now() WHERE id = $2', [b.body, m.id]);
+  return c.json({ ok: true });
+});
+
+threadRoutes.delete('/messages/:id', async (c) => {
+  const a = requireAuth(c);
+  const m = await loadOwnMessage(a, c.req.param('id'));
+  // Soft delete keeps reply structure intact ("message deleted").
+  await q('UPDATE messages SET deleted_at = now(), body = $2 WHERE id = $1', [m.id, '']);
+  const atts = await q<any>(`SELECT id, blob_key FROM attachments WHERE entity_type = 'message' AND entity_id = $1`, [m.id]);
+  for (const att of atts) await getStorage().delete(att.blob_key);
+  await q(`DELETE FROM attachments WHERE entity_type = 'message' AND entity_id = $1`, [m.id]);
+  return c.json({ ok: true });
+});
+
+// -------------------------------------------- generic per-entity operations
+export const entityRoutes = new Hono<AppEnv>();
+
+function entityType(c: any) {
+  const t = c.req.param('type');
+  if (!isEntityType(t)) throw notFound();
+  return t;
+}
+
+entityRoutes.post('/entities/:type/:id/archive', async (c) => {
+  const a = requireAuth(c);
+  const type = entityType(c);
+  const row = await loadEntity<any>(a, type, c.req.param('id'));
+  if (type === 'receipt') throw badRequest('Receipts cannot be archived');
+  await q(`UPDATE ${ENTITY_TABLES[type]} SET archived_at = now() WHERE id = $1`, [row.id]);
+  await logActivity(row.workspace_id, type, row.id, a.user.id, 'archived', 'Archived');
+  return c.json({ ok: true });
+});
+
+entityRoutes.post('/entities/:type/:id/unarchive', async (c) => {
+  const a = requireAuth(c);
+  const type = entityType(c);
+  const row = await loadEntity<any>(a, type, c.req.param('id'));
+  if (type === 'receipt') throw badRequest('Receipts cannot be archived');
+  await q(`UPDATE ${ENTITY_TABLES[type]} SET archived_at = NULL WHERE id = $1`, [row.id]);
+  if (type === 'task' && row.status === 'archived') await q(`UPDATE tasks SET status = 'todo' WHERE id = $1`, [row.id]);
+  await logActivity(row.workspace_id, type, row.id, a.user.id, 'restored', 'Restored from archive');
+  return c.json({ ok: true });
+});
+
+/**
+ * Permanent deletion. Records must be archived first, and shared records also
+ * need an explicit confirmation flag — deletion is never the default path.
+ */
+entityRoutes.delete('/entities/:type/:id', async (c) => {
+  const a = requireAuth(c);
+  const type = entityType(c);
+  const row = await loadEntity<any>(a, type, c.req.param('id'));
+  if (type !== 'receipt' && !row.archived_at) throw badRequest('Archive this first. Archived items can be restored; deletion is permanent.');
+  if (row.workspace_id === a.sharedWorkspaceId && c.req.query('confirm') !== 'permanent') {
+    throw new HttpError(428, 'confirmation_required', 'Deleting shared information is permanent. Confirm to continue.');
+  }
+  const atts = await q<any>('SELECT blob_key FROM attachments WHERE entity_type = $1 AND entity_id = $2', [type, row.id]);
+  for (const att of atts) await getStorage().delete(att.blob_key);
+  await q('DELETE FROM attachments WHERE entity_type = $1 AND entity_id = $2', [type, row.id]);
+  await q('DELETE FROM threads WHERE entity_type = $1 AND entity_id = $2', [type, row.id]);
+  await q('DELETE FROM reactions WHERE entity_type = $1 AND entity_id = $2', [type, row.id]);
+  await q('DELETE FROM favorites WHERE entity_type = $1 AND entity_id = $2', [type, row.id]);
+  await q('DELETE FROM recently_viewed WHERE entity_type = $1 AND entity_id = $2', [type, row.id]);
+  await q('DELETE FROM notifications WHERE entity_type = $1 AND entity_id = $2', [type, row.id]);
+  await q(`DELETE FROM ${ENTITY_TABLES[type]} WHERE id = $1`, [row.id]);
+  await logActivity(row.workspace_id, type, row.id, a.user.id, 'deleted', `Permanently deleted “${row.title ?? row.name ?? row.merchant ?? 'record'}”`);
+  return c.json({ ok: true });
+});
+
+entityRoutes.post('/entities/:type/:id/favorite', async (c) => {
+  const a = requireAuth(c);
+  const type = entityType(c);
+  const row = await loadEntity<any>(a, type, c.req.param('id'));
+  const b = parse(z.object({ favorite: z.boolean() }), await c.req.json());
+  if (b.favorite) await q('INSERT INTO favorites (user_id, entity_type, entity_id) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING', [a.user.id, type, row.id]);
+  else await q('DELETE FROM favorites WHERE user_id = $1 AND entity_type = $2 AND entity_id = $3', [a.user.id, type, row.id]);
+  return c.json({ ok: true });
+});
+
+entityRoutes.post('/entities/:type/:id/reaction', async (c) => {
+  const a = requireAuth(c);
+  const type = parse(ENTITY, c.req.param('type'));
+  const row = await loadEntity<any>(a, type, c.req.param('id'));
+  const b = parse(z.object({ reaction: z.enum(['love', 'yes', 'unsure', 'no']).nullable() }), await c.req.json());
+  if (b.reaction === null) {
+    await q('DELETE FROM reactions WHERE entity_type = $1 AND entity_id = $2 AND user_id = $3', [type, row.id, a.user.id]);
+  } else {
+    await q(
+      `INSERT INTO reactions (entity_type, entity_id, workspace_id, user_id, reaction) VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (entity_type, entity_id, user_id) DO UPDATE SET reaction = EXCLUDED.reaction, created_at = now()`,
+      [type, row.id, row.workspace_id, a.user.id, b.reaction],
+    );
+    const label = { love: 'loves', yes: 'is in favour of', unsure: 'is unsure about', no: 'is not keen on' }[b.reaction];
+    await notify({
+      recipients: a.members.map((m) => m.id), actorId: a.user.id, workspaceId: row.workspace_id, type: 'decision',
+      title: `${a.user.display_name} ${label} “${row.title ?? row.name}”`, entityType: type, entityId: row.id, dedupeKey: `reaction:${type}:${row.id}:${a.user.id}:${b.reaction}`,
+    });
+  }
+  return c.json({ ok: true });
+});
+
+entityRoutes.get('/entities/:type/:id/activity', async (c) => {
+  const a = requireAuth(c);
+  const type = entityType(c);
+  const row = await loadEntity<any>(a, type, c.req.param('id'));
+  const rows = await q(
+    `SELECT ac.action, ac.summary, ac.created_at, u.display_name AS actor_name FROM activity ac LEFT JOIN users u ON u.id = ac.actor_id
+      WHERE ac.entity_type = $1 AND ac.entity_id = $2 AND ac.workspace_id = ANY($3::uuid[]) ORDER BY ac.created_at DESC LIMIT 100`,
+    [type, row.id, [a.personalWorkspaceId, a.sharedWorkspaceId]],
+  );
+  return c.json({ activity: rows });
+});
