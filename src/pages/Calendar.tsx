@@ -3,7 +3,8 @@ import { Link } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, Plus, RefreshCw, Settings2, Sparkles, Download } from 'lucide-react';
 import { api, emitChange, useApi } from '../lib/api';
 import { useMe, useSession } from '../lib/session';
-import { addDays, day, eventTime, todayLocal } from '../lib/format';
+import { addDays, day, eventTime, time12, todayLocal } from '../lib/format';
+import { TimeGrid } from '../components/TimeGrid';
 import { useOpen } from '../components/Layout';
 import { EventForm } from '../components/forms';
 import { Field, Loading, Segmented, Sheet, SpaceTag, useAction, useToast } from '../components/ui';
@@ -16,22 +17,28 @@ function monthGrid(anchor: string) {
   return Array.from({ length: 42 }, (_, i) => addDays(start, i));
 }
 
+function weekStart(d: string) {
+  const dow = (new Date(`${d}T12:00:00Z`).getUTCDay() + 6) % 7;
+  return addDays(d, -dow);
+}
+
 export function CalendarPage() {
   const me = useMe();
   const { config } = useSession();
   const open = useOpen();
   const today = todayLocal(me.household.timezone);
-  const [anchor, setAnchor] = useState(today.slice(0, 8) + '01');
-  const [view, setView] = useState<'month' | 'agenda'>(() => (window.innerWidth < 700 ? 'agenda' : 'month'));
+  const [anchor, setAnchor] = useState(today);
+  const [view, setView] = useState<'day' | 'week' | 'month'>(() => (window.innerWidth < 700 ? 'day' : 'week'));
   const [scope, setScope] = useState<'all' | 'us' | 'me'>('all');
-  const [adding, setAdding] = useState<string | null>(null);
+  const [adding, setAdding] = useState<{ date: string; start_time?: string } | null>(null);
   const [pasting, setPasting] = useState(false);
   const [importing, setImporting] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const grid = useMemo(() => monthGrid(anchor), [anchor]);
-  const from = view === 'month' ? grid[0] : today;
-  const to = view === 'month' ? grid[41] : addDays(today, 60);
-  const { data, loading } = useApi<{ events: any[] }>(`/events?from=${from}&to=${to}&space=${scope}`);
+  const grid = useMemo(() => monthGrid(anchor.slice(0, 8) + '01'), [anchor]);
+  const week = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart(anchor), i)), [anchor]);
+  const from = view === 'month' ? grid[0] : view === 'week' ? week[0] : anchor;
+  const to = view === 'month' ? grid[41] : view === 'week' ? week[6] : anchor;
+  const { data } = useApi<{ events: any[]; busy: any[] }>(`/events?from=${from}&to=${to}&space=${scope}&busy=${scope === 'all' ? 'true' : 'false'}`);
   const { data: gstatus } = useApi<any>('/google/status');
   const byDay = useMemo(() => {
     const map = new Map<string, any[]>();
@@ -43,81 +50,72 @@ export function CalendarPage() {
     return map;
   }, [data]);
   const shift = (n: number) => {
+    if (view === 'day') return setAnchor(addDays(anchor, n));
+    if (view === 'week') return setAnchor(addDays(anchor, 7 * n));
     const [y, m] = anchor.split('-').map(Number);
-    const d = new Date(Date.UTC(y, m - 1 + n, 1));
-    setAnchor(d.toISOString().slice(0, 10));
+    setAnchor(new Date(Date.UTC(y, m - 1 + n, 1)).toISOString().slice(0, 10));
   };
+  const title = view === 'day' ? day(anchor, { weekday: 'long', month: 'long', day: 'numeric' })
+    : view === 'week' ? `${day(week[0], { month: 'short', day: 'numeric' })} – ${day(week[6], { month: 'short', day: 'numeric', year: 'numeric' })}`
+    : day(anchor, { month: 'long', year: 'numeric' });
   const hasConnections = (gstatus?.connections?.length ?? 0) > 0;
 
   return (
-    <div className="page">
-      <header className="page-head">
-        <div>
-          <h1>Calendar</h1>
-          <p className="muted">Shared events are visible to both of you. Private (ME) events only to you. Times in {me.household.timezone}.</p>
-        </div>
+    <div className="page calendar-page">
+      <header className="page-head compact">
+        <h1>Calendar</h1>
         <div className="row gap-s wrap">
           <button className="btn small" onClick={() => setPasting(true)}><Sparkles size={14} /> Add from text</button>
-          <button className="btn small primary" onClick={() => setAdding(today)}><Plus size={14} /> Event</button>
+          <button className="btn small primary" onClick={() => setAdding({ date: anchor })}><Plus size={14} /> Event</button>
         </div>
       </header>
       <div className="toolbar">
-        <Segmented label="View" value={view} onChange={setView} options={[{ value: 'month', label: 'Month' }, { value: 'agenda', label: 'Agenda' }]} />
-        <Segmented label="Show" value={scope} onChange={setScope} options={[{ value: 'all', label: 'All I can see' }, { value: 'us', label: 'US only' }, { value: 'me', label: 'Mine only' }]} />
+        <Segmented label="View" value={view} onChange={setView} options={[{ value: 'day', label: 'Day' }, { value: 'week', label: 'Week' }, { value: 'month', label: 'Month' }]} />
+        <Segmented label="Show" value={scope} onChange={setScope} options={[{ value: 'all', label: 'Everything' }, { value: 'us', label: 'Shared' }, { value: 'me', label: 'Mine' }]} />
         <span className="grow" />
         {config.google_configured ? (
           <>
-            {hasConnections && <button className="btn small ghost" onClick={() => setImporting(true)}><Download size={14} /> Import from Google</button>}
+            {hasConnections && <button className="btn small ghost" onClick={() => setImporting(true)}><Download size={14} /> Import</button>}
             {hasConnections && <button className="btn small ghost" onClick={() => setRefreshing(true)}><RefreshCw size={14} /> Check for changes</button>}
-            <Link className="btn small ghost" to="/calendar/connections"><Settings2 size={14} /> Google calendars</Link>
+            <Link className="btn small ghost" to="/calendar/connections"><Settings2 size={14} /> Google</Link>
           </>
-        ) : <Link className="small muted" to="/calendar/connections">Google Calendar: not configured</Link>}
+        ) : <Link className="small muted" to="/calendar/connections">Google Calendar: not set up</Link>}
       </div>
+      <div className="month-head">
+        <button className="icon-btn" onClick={() => shift(-1)} aria-label="Previous"><ChevronLeft size={18} /></button>
+        <h2>{title}</h2>
+        <button className="icon-btn" onClick={() => shift(1)} aria-label="Next"><ChevronRight size={18} /></button>
+        <button className="btn small ghost" onClick={() => setAnchor(today)}>Today</button>
+        <span className="grow" />
+        <span className="legend"><i className="ev-us" /> Shared <i className="ev-me" /> Private {scope === 'all' && <><i className="busy" /> {me.partner?.display_name ?? 'Partner'} busy</>}</span>
+      </div>
+      {view !== 'month' && (
+        <TimeGrid days={view === 'day' ? [anchor] : week} events={data?.events ?? []} busy={data?.busy ?? []} lanes={view === 'day' && Boolean(me.partner)}
+          hourHeight={view === 'day' ? 52 : 44} onAdd={(date, start_time) => setAdding({ date, start_time })} />
+      )}
       {view === 'month' && (
         <div className="month">
-          <div className="month-head">
-            <button className="icon-btn" onClick={() => shift(-1)} aria-label="Previous month"><ChevronLeft size={18} /></button>
-            <h2>{day(anchor, { month: 'long', year: 'numeric' })}</h2>
-            <button className="icon-btn" onClick={() => shift(1)} aria-label="Next month"><ChevronRight size={18} /></button>
-            <button className="btn small ghost" onClick={() => setAnchor(today.slice(0, 8) + '01')}>Today</button>
-          </div>
           <div className="month-grid" role="grid">
             {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => <div key={d} className="dow" role="columnheader">{d}</div>)}
             {grid.map((d) => {
               const evs = byDay.get(d) ?? [];
               return (
-                <div key={d} role="gridcell" className={`cell ${d.slice(0, 7) !== anchor.slice(0, 7) ? 'other' : ''} ${d === today ? 'today' : ''}`} onDoubleClick={() => setAdding(d)}>
-                  <button className="cell-day" onClick={() => setAdding(d)} aria-label={`Add event on ${d}`}>{Number(d.slice(8))}</button>
-                  {evs.slice(0, 4).map((e) => (
+                <div key={d} role="gridcell" className={`cell ${d.slice(0, 7) !== anchor.slice(0, 7) ? 'other' : ''} ${d === today ? 'today' : ''}`} onDoubleClick={() => setAdding({ date: d })}>
+                  <button className="cell-day" onClick={() => { setAnchor(d); setView('day'); }} aria-label={`Open ${d}`}>{Number(d.slice(8))}</button>
+                  {evs.slice(0, 3).map((e) => (
                     <button key={e.id + d} className={`ev ev-${e.space} ${e.availability_only ? 'busy' : ''}`} onClick={() => open('event', e.id)} title={e.title}>
-                      {!e.all_day && e.start_time && d === e.start_date && <span className="ev-time">{e.start_time}</span>}{e.title}
+                      {!e.all_day && e.start_time && d === e.start_date && <span className="ev-time">{time12(e.start_time).replace(':00', '')}</span>}{e.title}
                     </button>
                   ))}
-                  {evs.length > 4 && <span className="more">+{evs.length - 4} more</span>}
+                  {evs.length > 3 && <button className="more" onClick={() => { setAnchor(d); setView('day'); }}>+{evs.length - 3} more</button>}
                 </div>
               );
             })}
           </div>
         </div>
       )}
-      {view === 'agenda' && (loading && !data ? <Loading /> : (
-        <div className="agenda">
-          {[...byDay.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([d, evs]) => (
-            <section key={d}>
-              <h3 className={d === today ? 'today' : ''}>{day(d, { weekday: 'long', day: 'numeric', month: 'long' })}</h3>
-              <ul className="rows">{evs.map((e) => (
-                <li key={e.id}><button className="row-btn" onClick={() => open('event', e.id)}>
-                  <span className="time">{eventTime(e)}</span><span className="grow">{e.title}{e.location && <span className="muted small"> · {e.location}</span>}</span>
-                  {e.imported_by_name && <span className="muted small hide-sm">{e.imported_by_name}’s {e.google_calendar_name}</span>}
-                  <SpaceTag space={e.space} />
-                </button></li>
-              ))}</ul>
-            </section>
-          ))}
-          {!byDay.size && <p className="muted">No events in the next 60 days.</p>}
-        </div>
-      ))}
-      {adding && <Sheet title="New event" onClose={() => setAdding(null)} wide><EventForm space="us" chooseSpace initial={{ date: adding }} onCancel={() => setAdding(null)} onSaved={() => { setAdding(null); emitChange(); }} /></Sheet>}
+      {view === 'day' && !me.partner && <p className="muted small">Invite your partner in Settings to see both schedules side by side.</p>}
+      {adding && <Sheet title="New event" onClose={() => setAdding(null)} wide><EventForm space="us" chooseSpace initial={adding} onCancel={() => setAdding(null)} onSaved={() => { setAdding(null); emitChange(); }} /></Sheet>}
       {pasting && <PasteEvents onClose={() => setPasting(false)} />}
       {importing && <ImportDialog status={gstatus} onClose={() => setImporting(false)} />}
       {refreshing && <RefreshDialog onClose={() => setRefreshing(false)} />}
@@ -190,7 +188,7 @@ function DraftCard({ draft, done, discarded, onSaved, onDiscard }: { draft: any;
           title: draft.title, date, start_time: time, end_time: draft.end_time ?? (draft.duration_minutes && time ? addMinutes(time, draft.duration_minutes) : ''),
           location: draft.location, participants: draft.participants, participantsText: draft.participants.join(', '),
           description: [draft.description, draft.time_hint ? `Time: ${draft.time_hint}` : ''].filter(Boolean).join('\n'),
-          category: draft.category ?? '', for_user_id: draft.for_user_id,
+          category: draft.category ?? '', for_user_id: draft.for_user_id, from_text: true,
         }}
         onCancel={onDiscard} onSaved={() => { emitChange(); onSaved(); }} />
     </div>

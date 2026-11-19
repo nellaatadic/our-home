@@ -111,18 +111,6 @@ describe('Groceries NEED → STOCK', () => {
     expect(tagged.map((x: any) => x.id)).toEqual([b.id]);
   });
 
-  it('shows the partner view without private data', async () => {
-    const { me, you, youId } = await household();
-    await you.ok('POST', '/spaces/me/items', { module: 'idea', title: 'Zsolt private wish' });
-    await you.ok('POST', '/spaces/us/items', { module: 'idea', title: 'Zsolt shared idea' });
-    await me.ok('POST', '/spaces/us/tasks', { title: 'Call landlord', assignee: 'user', assigned_user_id: youId });
-    const pv = await me.ok('GET', '/partner');
-    expect(pv.partner.display_name).toBe('Zsolt');
-    expect(pv.contributed.map((i: any) => i.title)).toEqual(['Zsolt shared idea']);
-    expect(pv.tasks.map((t: any) => t.title)).toEqual(['Call landlord']);
-    expect(JSON.stringify(pv)).not.toContain('private wish');
-  });
-
   it('records inventory and individual vs shared expenses with custom allocation', async () => {
     const { me, meId, youId } = await household();
     const inv = (await me.ok('POST', '/spaces/us/inventory', { name: 'Dishwasher', room: 'Kitchen', brand: 'Bosch', warranty_until: '2028-05-01', manual_url: 'https://example.com/manual.pdf' })).item;

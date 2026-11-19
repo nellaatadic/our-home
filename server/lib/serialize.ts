@@ -8,7 +8,7 @@ import { spaceOf, type Auth } from './access.js';
  */
 export async function decorate<T extends { id: string; workspace_id: string }>(
   auth: Auth,
-  type: 'item' | 'task' | 'event' | 'inventory' | 'expense',
+  type: 'item' | 'task' | 'event' | 'inventory' | 'expense' | 'topic',
   rows: T[],
 ): Promise<(T & Record<string, unknown>)[]> {
   if (!rows.length) return [];

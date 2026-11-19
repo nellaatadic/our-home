@@ -1,15 +1,16 @@
 # Test report
 
-Run on 2026-11-18 with `npm test` (Vitest 5, Node 22, PostgreSQL 16 on localhost). The tests drive the real Hono API (`app.fetch`) against a real Postgres database, using two distinct user accounts per household and separate households for isolation tests. Google is replaced by an in-memory fake of the OAuth and Calendar v3 endpoints (`tests/google-mock.ts`). The fake records every request, so the tests can prove that no write calls reach a source calendar. AI is turned off (`AI_FEATURES=off`), so the built-in parsers are what gets tested.
+Run on 2026-11-19 (after the lists / chat / dashboard redesign) with `npm test` (Vitest 5, Node 22, PostgreSQL 16 on localhost). The tests drive the real Hono API (`app.fetch`) against a real Postgres database, using two distinct user accounts per household and separate households for isolation tests. Google is replaced by an in-memory fake of the OAuth and Calendar v3 endpoints (`tests/google-mock.ts`). The fake records every request, so the tests can prove that no write calls reach a source calendar. AI is turned off (`AI_FEATURES=off`), so the built-in parsers are what gets tested.
 
-**Result: 5 test files, 42 tests, all passing.**
+**Result: 6 test files, 54 tests, all passing.**
 
 | Area | File |
 |---|---|
 | Migrations, schema constraints, authentication, sessions, CSRF, rate limiting, signup modes | `tests/auth.test.ts` |
 | Scenarios A, B, G, H, archive / delete | `tests/scenarios.test.ts` |
 | Scenarios C, D, E; natural-language parser with a fixed clock | `tests/calendar.test.ts` |
-| Scenario F, groceries NEED→STOCK, comparisons, partner view, inventory, expenses; receipt parser, time zones, SSRF guard, link metadata | `tests/lists-receipts.test.ts` |
+| Scenario F, groceries NEED→STOCK, comparisons, inventory, expenses; receipt parser, time zones, SSRF guard, link metadata | `tests/lists-receipts.test.ts` |
+| Redesign: Toronto/CAD defaults; shared-unless-locked (locking moves chat, photos, subtasks; only the creator can lock); NEED/STOCK on all lists; search and filters; moving lists; repeating items; dated-item reminders; general chat, card references, conversation cards, private topics; yearly birthdays and important dates; opt-in Busy blocks; dashboard widget settings; data page privacy | `tests/redesign.test.ts` |
 | UI interaction (jsdom + Testing Library): the Share with US dialog | `tests/ui/share-dialog.test.tsx` |
 
 ## Detailed results
@@ -57,8 +58,8 @@ Run on 2026-11-18 with `npm test` (Vitest 5, Node 22, PostgreSQL 16 on localhost
  ✓ tests/auth.test.ts > authentication & household membership > first-user-only signup mode closes open registration once someone exists 83ms
  ✓ tests/ui/share-dialog.test.tsx > UI: Share with US dialog > previews a list, lets the user exclude items and edit one, and sends only the selection 554ms
  ✓ tests/ui/share-dialog.test.tsx > UI: Share with US dialog > makes moving explicit 83ms
- Test Files  5 passed (5)
-      Tests  42 passed (42)
+ Test Files  6 passed (6)
+      Tests  54 passed (54)
    Duration  24.70s (tests 66%, import 23%, environment 9%, transform 1%)
 ```
 
@@ -76,3 +77,12 @@ Run on 2026-11-18 with `npm test` (Vitest 5, Node 22, PostgreSQL 16 on localhost
 - **Real Claude calls:** reading receipt photos and AI text → events were not exercised (no API key in the test environment). The fallback paths are tested.
 - **The production stack:** Netlify Functions runtime, Netlify Database driver and Netlify Blobs were not run locally; locally the app uses `pg` and filesystem storage behind the same interfaces. Do a smoke test after the first deploy.
 - **Browser coverage:** UI tests cover the share dialog only. The other screens were checked by hand in Chromium at desktop and mobile widths, not in Safari or Firefox.
+
+## Redesign: manual checks in the browser (2026-11-19)
+
+Checked in the running app as Nella with local demo data, at desktop (1440 px) and phone (375 px) widths:
+- Dashboard: greeting and date, three list widgets in one row, important dates with "turns 35", to-dos mixed with dated items, today's hourly view with Nella / Zsolt columns and Zsolt's opt-in Busy block.
+- Groceries: sections, NEED / STOCK tabs, Scan receipt button, comment button → quick chat; typing @ suggested a card, and the sent message showed a clickable card link.
+- Item details: Reminders-style groups (date, time, urgent, repeat, early reminder, list, section, tags, subtasks, flag, priority, amount, privacy, photos).
+- Chat: conversation cards, inline expansion, ongoing chat with card link.
+- Calendar: day, week and month views. Data: spending, open topics, grocery habits, calendar load.

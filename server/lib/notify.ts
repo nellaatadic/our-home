@@ -79,5 +79,24 @@ export async function dispatchDueReminders(householdId?: string): Promise<number
     });
     await q('UPDATE tasks SET reminder_sent_at = now() WHERE id = $1', [t.id]);
   }
+  // List items with a date (e.g. "Eggs, today 2 PM"). Urgent ones go to both of you in US.
+  const items = await q<any>(
+    `SELECT i.id, i.title, i.reminder_at, i.workspace_id, i.assigned_to, i.created_by, i.urgent
+       FROM items i JOIN workspaces w ON w.id = i.workspace_id
+      WHERE i.reminder_at IS NOT NULL AND i.reminder_at <= now() AND i.reminder_sent_at IS NULL
+        AND i.grocery_state = 'need' AND i.archived_at IS NULL
+        AND ($1::uuid IS NULL OR w.household_id = $1)
+      LIMIT 200`,
+    [householdId ?? null],
+  );
+  for (const it of items) {
+    const recipients = it.urgent ? await workspaceAudience(it.workspace_id) : [it.assigned_to ?? it.created_by].filter(Boolean);
+    n += await notify({
+      recipients, actorId: null, workspaceId: it.workspace_id, type: 'reminder',
+      title: `${it.urgent ? 'Urgent: ' : 'Reminder: '}${it.title}`, entityType: 'item', entityId: it.id,
+      dedupeKey: `reminder:item:${it.id}:${new Date(it.reminder_at).toISOString()}`,
+    });
+    await q('UPDATE items SET reminder_sent_at = now() WHERE id = $1', [it.id]);
+  }
   return n;
 }

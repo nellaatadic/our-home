@@ -26,6 +26,7 @@ export const eventInput = z.object({
   category: optText(60),
   for_user_id: uuid.nullish(),
   source_type: z.enum(['manual', 'text']).optional(),
+  yearly: z.boolean().optional(),
 });
 
 /** Convert form fields (local wall-clock in household tz) to stored columns. */
@@ -49,7 +50,7 @@ export function eventColumns(b: Partial<z.infer<typeof eventInput>>, tz: string,
     }
     Object.assign(cols, { starts_at: starts, ends_at: ends, time_unspecified: false, end_date: ends ? utcToZoned(ends, tz).date : endDate ?? date });
   }
-  for (const k of ['title', 'location', 'description', 'notes', 'participants', 'category', 'for_user_id'] as const) if (b[k] !== undefined) cols[k] = b[k];
+  for (const k of ['title', 'location', 'description', 'notes', 'participants', 'category', 'for_user_id', 'yearly'] as const) if (b[k] !== undefined) cols[k] = b[k];
   return cols;
 }
 
@@ -72,17 +73,77 @@ export async function serializeEvents(a: Auth, rows: any[]) {
   }));
 }
 
-eventRoutes.get('/events', async (c) => {
-  const a = requireAuth(c);
-  const f = parse(z.object({ from: dateStr, to: dateStr, space: z.enum(['me', 'us', 'all']).optional(), archived: z.enum(['true']).optional() }), c.req.query());
-  const wss = f.space === 'me' ? [a.personalWorkspaceId] : f.space === 'us' ? [a.sharedWorkspaceId] : accessibleWorkspaceIds(a);
-  const rows = await q(
-    `SELECT * FROM events WHERE workspace_id = ANY($1::uuid[]) AND start_date <= $3 AND COALESCE(end_date, start_date) >= $2
+/** Dates on which a yearly event (birthday, anniversary) falls inside [from, to]. 29 Feb → 28 Feb in other years. */
+export function yearlyOccurrences(startDate: string, from: string, to: string): string[] {
+  const md = startDate.slice(5);
+  const out: string[] = [];
+  for (let y = Number(from.slice(0, 4)); y <= Number(to.slice(0, 4)); y++) {
+    if (y < Number(startDate.slice(0, 4))) continue;
+    const leap = (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+    const d = `${y}-${md === '02-29' && !leap ? '02-28' : md}`;
+    if (d >= from && d <= to) out.push(d);
+  }
+  return out;
+}
+
+/** Load events in a date range, expanding yearly ones into their occurrences. */
+export async function eventsInRange(a: Auth, wss: string[], from: string, to: string, archived = false) {
+  const rows = await q<any>(
+    `SELECT * FROM events WHERE workspace_id = ANY($1::uuid[]) AND NOT yearly AND start_date <= $3 AND COALESCE(end_date, start_date) >= $2
        AND (CASE WHEN $4 THEN archived_at IS NOT NULL ELSE archived_at IS NULL END)
      ORDER BY start_date, all_day DESC, starts_at NULLS FIRST LIMIT 2000`,
-    [wss, f.from, f.to, f.archived === 'true'],
+    [wss, from, to, archived],
   );
-  return c.json({ events: await serializeEvents(a, rows), timezone: a.household.timezone });
+  const yearly = await q<any>(
+    `SELECT * FROM events WHERE workspace_id = ANY($1::uuid[]) AND yearly AND start_date <= $2
+       AND (CASE WHEN $3 THEN archived_at IS NOT NULL ELSE archived_at IS NULL END) LIMIT 500`,
+    [wss, to, archived],
+  );
+  const serialized = await serializeEvents(a, [...rows, ...yearly]);
+  const plain = serialized.slice(0, rows.length);
+  const expanded = serialized.slice(rows.length).flatMap((e: any) =>
+    yearlyOccurrences(e.start_date, from, to).map((d) => ({
+      ...e, start_date: d, end_date: d, occurrence_of: e.start_date,
+      years: Number(d.slice(0, 4)) - Number(e.start_date.slice(0, 4)),
+    })),
+  );
+  return [...plain, ...expanded].sort((x: any, y: any) => (x.start_date < y.start_date ? -1 : x.start_date > y.start_date ? 1 : (x.start_time ?? '') < (y.start_time ?? '') ? -1 : 1));
+}
+
+/**
+ * The partner's private time as anonymous "Busy" blocks — only if the partner
+ * turned on "Show my private time as Busy". Only times are selected: no ids,
+ * titles, places or notes ever leave their private space.
+ */
+export async function partnerBusy(a: Auth, from: string, to: string) {
+  if (!a.partner) return [];
+  const p = await q1<any>(
+    `SELECT w.id FROM workspaces w JOIN user_settings s ON s.user_id = w.owner_user_id
+      WHERE w.kind = 'personal' AND w.owner_user_id = $1 AND w.household_id = $2 AND s.share_availability`,
+    [a.partner.id, a.household.id],
+  );
+  if (!p) return [];
+  const rows = await q<any>(
+    `SELECT start_date, end_date, all_day, starts_at, ends_at FROM events
+      WHERE workspace_id = $1 AND archived_at IS NULL AND NOT yearly AND start_date <= $3 AND COALESCE(end_date, start_date) >= $2 AND NOT time_unspecified
+      ORDER BY start_date, starts_at LIMIT 500`,
+    [p.id, from, to],
+  );
+  const tz = a.household.timezone;
+  return rows.map((r) => ({
+    user_id: a.partner!.id, start_date: r.start_date, end_date: r.end_date, all_day: r.all_day,
+    start_time: r.starts_at ? utcToZoned(new Date(r.starts_at), tz).time : null,
+    end_time: r.ends_at ? utcToZoned(new Date(r.ends_at), tz).time : null,
+  }));
+}
+
+eventRoutes.get('/events', async (c) => {
+  const a = requireAuth(c);
+  const f = parse(z.object({ from: dateStr, to: dateStr, space: z.enum(['me', 'us', 'all']).optional(), archived: z.enum(['true']).optional(), busy: z.enum(['true']).optional() }), c.req.query());
+  if (f.to < f.from || f.to > addDays(f.from, 800)) throw badRequest('Choose a shorter date range');
+  const wss = f.space === 'me' ? [a.personalWorkspaceId] : f.space === 'us' ? [a.sharedWorkspaceId] : accessibleWorkspaceIds(a);
+  const events = await eventsInRange(a, wss, f.from, f.to, f.archived === 'true');
+  return c.json({ events, busy: f.busy === 'true' ? await partnerBusy(a, f.from, f.to) : [], timezone: a.household.timezone });
 });
 
 eventRoutes.post('/spaces/:space/events', async (c) => {

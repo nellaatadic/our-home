@@ -77,7 +77,7 @@ authRoutes.post('/register', async (c) => {
       }
       householdId = (await db.query<{ id: string }>(
         'INSERT INTO households (name, timezone) VALUES ($1, $2) RETURNING id',
-        [body.household_name ?? 'Our home', body.timezone ?? 'UTC'],
+        [body.household_name ?? 'Our home', body.timezone ?? 'America/Toronto'],
       )).rows[0].id;
       role = 'primary';
     }
@@ -221,10 +221,16 @@ householdRoutes.patch('/settings', async (c) => {
       notify_mentions: z.boolean().optional(), notify_replies: z.boolean().optional(), notify_shared: z.boolean().optional(),
       notify_assigned: z.boolean().optional(), notify_reminders: z.boolean().optional(), notify_calendar: z.boolean().optional(),
       notify_decisions: z.boolean().optional(), dashboard_sections: z.array(z.enum(SECTIONS)).max(10).optional(),
+      share_availability: z.boolean().optional(),
+      dashboard: z.object({
+        widgets: z.partialRecord(z.enum(['grocery', 'home', 'idea']), z.object({
+          max: z.number().int().min(1).max(20), size: z.enum(['s', 'm', 'l']), hidden: z.boolean().optional(),
+        })).optional(),
+      }).optional(),
     }),
     await c.req.json(),
   );
-  const cols = Object.entries(b).filter(([, v]) => v !== undefined);
+  const cols = Object.entries(b).filter(([, v]) => v !== undefined).map(([k, v]) => [k, k === 'dashboard' ? JSON.stringify(v) : v] as const);
   if (cols.length) {
     const sets = cols.map(([k], i) => `${k} = $${i + 2}`).join(', ');
     await q(`UPDATE user_settings SET ${sets} WHERE user_id = $1`, [a.user.id, ...cols.map(([, v]) => v)]);

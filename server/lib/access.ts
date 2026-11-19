@@ -50,9 +50,10 @@ export const ENTITY_TABLES = {
   inventory: 'inventory_items',
   expense: 'expenses',
   receipt: 'receipts',
+  topic: 'topics',
 } as const;
 export type EntityType = keyof typeof ENTITY_TABLES;
-export const THREAD_ENTITY_TYPES = ['item', 'task', 'event', 'inventory', 'expense'] as const;
+export const THREAD_ENTITY_TYPES = ['item', 'task', 'event', 'inventory', 'expense', 'topic'] as const;
 export type ThreadEntityType = (typeof THREAD_ENTITY_TYPES)[number];
 
 export function isEntityType(t: string): t is EntityType {

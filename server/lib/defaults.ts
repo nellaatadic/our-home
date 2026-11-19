@@ -20,15 +20,18 @@ export const GROCERY_CATEGORIES: { group: string; name: string; color: string }[
   { group: 'Household products', name: 'Other household items', color: '#8a8178' },
 ];
 
-export const HOME_CATEGORIES = ['Furniture', 'Lighting', 'Storage', 'Decor', 'Textiles', 'Paint and walls', 'Appliances', 'Repairs', 'Other'];
-export const IDEA_CATEGORIES = ['Clothing', 'Gift', 'Event', 'Travel', 'Restaurant', 'Activity', 'Research', 'Future plan', 'Other'];
+export const HOME_CATEGORIES = ['Furniture', 'Lighting', 'Storage', 'Decor', 'Textiles', 'Kitchen', 'Appliances', 'Electronics & gadgets', 'Tools', 'Repairs', 'Other'];
+export const IDEA_CATEGORIES = ['Clothing', 'Shoes & accessories', 'Beauty & care', 'Gifts', 'Books & media', 'Sports & outdoors', 'Travel', 'Pets', 'Other'];
+
+/** The three lists, by internal module name. */
+export const LIST_NAMES = { grocery: 'Groceries', home: 'Home & Gadgets', idea: 'Shopping & Other' } as const;
 export const ROOMS = ['Kitchen', 'Living room', 'Bedroom', 'Bathroom', 'Office', 'Hallway', 'Storage', 'Outdoor', 'Other'];
 
 /** Create default lists and categories for a new workspace. */
 export async function seedWorkspace(db: Queryable, workspaceId: string, userId: string, kind: 'personal' | 'shared') {
   const listNames: Record<string, string> = kind === 'shared'
-    ? { grocery: 'Our groceries', home: 'Home improvement', idea: 'Ideas & plans' }
-    : { grocery: 'My shopping', home: 'My home ideas', idea: 'My ideas & wishes' };
+    ? { ...LIST_NAMES }
+    : { grocery: 'My groceries', home: 'My home & gadgets', idea: 'My shopping & other' };
   for (const [module, name] of Object.entries(listNames)) {
     await db.query('INSERT INTO lists (workspace_id, module, name, is_default, created_by) VALUES ($1,$2,$3,true,$4)', [workspaceId, module, name, userId]);
   }
