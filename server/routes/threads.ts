@@ -6,6 +6,11 @@ import { canAccessWorkspace, ENTITY_TABLES, isEntityType, loadEntity, THREAD_ENT
 import { badRequest, forbidden, HttpError, notFound, parse, uuid } from '../lib/http.js';
 import { logActivity, notify } from '../lib/notify.js';
 import { getStorage } from '../lib/storage.js';
+import { parseRefs } from '../lib/refs.js';
+import { archivePlanParts } from './plans.js';
+import { LIST_NAMES } from '../lib/defaults.js';
+
+const listTitle = (l: any) => (l.module === 'custom' ? l.name : LIST_NAMES[l.module as keyof typeof LIST_NAMES] ?? l.name);
 
 /** One discussion thread per record. Access to a thread == access to its record. */
 export const threadRoutes = new Hono<AppEnv>();
@@ -49,7 +54,7 @@ export function resolveMentions(a: Auth, body: string, audience: string[]): stri
 
 async function serializeMessages(threadId: string) {
   const rows = await q<any>(
-    `SELECT m.id, m.author_id, u.display_name AS author_name, m.reply_to_id, m.created_at, m.edited_at, m.deleted_at,
+    `SELECT m.id, m.author_id, u.display_name AS author_name, m.reply_to_id, m.mirrored_from_id, m.created_at, m.edited_at, m.deleted_at,
             CASE WHEN m.deleted_at IS NULL THEN m.body ELSE '' END AS body,
             COALESCE((SELECT array_agg(user_id) FROM mentions WHERE message_id = m.id), '{}') AS mention_ids
        FROM messages m LEFT JOIN users u ON u.id = m.author_id
@@ -134,7 +139,7 @@ threadRoutes.post('/threads/:type/:id/messages', async (c) => {
   const audience = entity.workspace_id === a.sharedWorkspaceId ? a.members.map((m) => m.id) : [a.user.id];
   const mentioned = resolveMentions(a, b.body, audience).filter((u) => u !== a.user.id);
   for (const u of mentioned) await q('INSERT INTO mentions (message_id, user_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [msg.id, u]);
-  const title = entity.title ?? entity.name ?? 'an item';
+  const title = entity.title ?? (type === 'list' ? listTitle(entity) : entity.name) ?? 'an item';
   const preview = b.body.slice(0, 140);
   if (mentioned.length) {
     await notify({ recipients: mentioned, actorId: a.user.id, workspaceId: entity.workspace_id, type: 'mention', title: `${a.user.display_name} mentioned you on “${title}”`, body: preview, entityType: type, entityId: entity.id, messageId: msg.id });
@@ -144,17 +149,65 @@ threadRoutes.post('/threads/:type/:id/messages', async (c) => {
   const replyRecipients = new Set<string>(participants.map((p) => p.author_id));
   if (entity.created_by) replyRecipients.add(entity.created_by);
   if (replyTo?.author_id) replyRecipients.add(replyTo.author_id);
+  // A list's chat (e.g. Groceries) is for both of you, like the main chat.
+  if (type === 'list') audience.forEach((u) => replyRecipients.add(u));
   mentioned.forEach((m) => replyRecipients.delete(m));
   replyRecipients.delete(a.user.id);
   if (replyRecipients.size) {
-    await notify({ recipients: [...replyRecipients], actorId: a.user.id, workspaceId: entity.workspace_id, type: 'reply', title: type === 'topic' ? `${a.user.display_name} wrote in “${title}”` : `${a.user.display_name} replied on “${title}”`, body: preview, entityType: type, entityId: entity.id, messageId: msg.id });
+    await notify({ recipients: [...replyRecipients], actorId: a.user.id, workspaceId: entity.workspace_id, type: 'reply', title: type === 'topic' || type === 'list' ? `${a.user.display_name} wrote in “${title}”` : `${a.user.display_name} replied on “${title}”`, body: preview, entityType: type, entityId: entity.id, messageId: msg.id });
   }
   if (type === 'item' && entity.decision_status === 'idea' && entity.workspace_id === a.sharedWorkspaceId) {
     await q(`UPDATE items SET decision_status = 'discussing', updated_at = now() WHERE id = $1`, [entity.id]);
   }
+  await mirrorIntoCards(a, thread, msg);
   const all = await serializeMessages(thread.id);
   return c.json({ message: all.find((m) => m.id === msg.id) }, 201);
 });
+
+/**
+ * Main chat → cards. When someone replies to a message in the main chat that
+ * references a card (@[Dinner with Marco](event:…)), that message and the
+ * replies to it are copied into the card's own conversation, so the card keeps
+ * the whole discussion. Copies keep their author and time, are never counted
+ * as unread twice, and follow edits and deletions of the original.
+ * Only cards the replying person can open receive a copy.
+ */
+async function mirrorIntoCards(a: Auth, thread: any, msg: any) {
+  if (thread.entity_type !== 'topic' || !msg.reply_to_id) return;
+  const topic = await q1<{ is_general: boolean }>('SELECT is_general FROM topics WHERE id = $1', [thread.entity_id]);
+  if (!topic?.is_general) return;
+  const chain = await q<any>(
+    `WITH RECURSIVE up AS (
+       SELECT id, reply_to_id, author_id, body, created_at, deleted_at, 0 AS depth FROM messages WHERE id = $1
+       UNION ALL
+       SELECT m.id, m.reply_to_id, m.author_id, m.body, m.created_at, m.deleted_at, up.depth + 1
+         FROM messages m JOIN up ON m.id = up.reply_to_id WHERE up.depth < 25 AND m.thread_id = $2
+     ) SELECT * FROM up WHERE deleted_at IS NULL ORDER BY created_at`,
+    [msg.id, thread.id],
+  );
+  const refs = parseRefs(chain.map((m) => m.body).join('\n'));
+  for (const ref of refs) {
+    let entity: any;
+    try { entity = await loadEntity<any>(a, ref.type as ThreadEntityType, ref.id); } catch { continue; }
+    if (entity.archived_at || (ref.type === 'topic' && entity.is_general)) continue;
+    const target = await getOrCreateThread(entity.workspace_id, ref.type as ThreadEntityType, entity.id);
+    if (target.id === thread.id) continue;
+    const existing = await q<{ id: string; mirrored_from_id: string }>(
+      'SELECT id, mirrored_from_id FROM messages WHERE thread_id = $1 AND mirrored_from_id = ANY($2::uuid[])',
+      [target.id, chain.map((m) => m.id)],
+    );
+    const copyOf = new Map(existing.map((e) => [e.mirrored_from_id, e.id]));
+    for (const m of chain) {
+      if (copyOf.has(m.id)) continue;
+      const copy = await q1<{ id: string }>(
+        `INSERT INTO messages (thread_id, author_id, body, reply_to_id, created_at, mirrored_from_id) VALUES ($1,$2,$3,$4,$5,$6)
+         ON CONFLICT (thread_id, mirrored_from_id) WHERE mirrored_from_id IS NOT NULL DO NOTHING RETURNING id`,
+        [target.id, m.author_id, m.body, m.reply_to_id ? copyOf.get(m.reply_to_id) ?? null : null, m.created_at, m.id],
+      );
+      if (copy) copyOf.set(m.id, copy.id);
+    }
+  }
+}
 
 async function loadOwnMessage(a: Auth, id: string) {
   const m = await q1<any>(
@@ -163,6 +216,7 @@ async function loadOwnMessage(a: Auth, id: string) {
   );
   if (!m || !canAccessWorkspace(a, m.workspace_id)) throw notFound();
   if (m.author_id !== a.user.id) throw forbidden('You can only change your own messages');
+  if (m.mirrored_from_id) throw forbidden('This is a copy from Our chat. Change the original there.');
   if (m.deleted_at) throw new HttpError(410, 'gone', 'This message was deleted');
   return m;
 }
@@ -171,7 +225,7 @@ threadRoutes.patch('/messages/:id', async (c) => {
   const a = requireAuth(c);
   const m = await loadOwnMessage(a, c.req.param('id'));
   const b = parse(z.object({ body: z.string().trim().min(1).max(5000) }), await c.req.json());
-  await q('UPDATE messages SET body = $1, edited_at = now() WHERE id = $2', [b.body, m.id]);
+  await q('UPDATE messages SET body = $1, edited_at = now() WHERE id = $2 OR mirrored_from_id = $2', [b.body, m.id]);
   return c.json({ ok: true });
 });
 
@@ -179,7 +233,7 @@ threadRoutes.delete('/messages/:id', async (c) => {
   const a = requireAuth(c);
   const m = await loadOwnMessage(a, c.req.param('id'));
   // Soft delete keeps reply structure intact ("message deleted").
-  await q('UPDATE messages SET deleted_at = now(), body = $2 WHERE id = $1', [m.id, '']);
+  await q('UPDATE messages SET deleted_at = now(), body = $2 WHERE id = $1 OR mirrored_from_id = $1', [m.id, '']);
   const atts = await q<any>(`SELECT id, blob_key FROM attachments WHERE entity_type = 'message' AND entity_id = $1`, [m.id]);
   for (const att of atts) await getStorage().delete(att.blob_key);
   await q(`DELETE FROM attachments WHERE entity_type = 'message' AND entity_id = $1`, [m.id]);
@@ -191,7 +245,8 @@ export const entityRoutes = new Hono<AppEnv>();
 
 function entityType(c: any) {
   const t = c.req.param('type');
-  if (!isEntityType(t)) throw notFound();
+  // Lists are archived and deleted through /lists, which takes their items along.
+  if (!isEntityType(t) || t === 'list') throw notFound();
   return t;
 }
 
@@ -200,7 +255,8 @@ entityRoutes.post('/entities/:type/:id/archive', async (c) => {
   const type = entityType(c);
   const row = await loadEntity<any>(a, type, c.req.param('id'));
   if (type === 'receipt') throw badRequest('Receipts cannot be archived');
-  await q(`UPDATE ${ENTITY_TABLES[type]} SET archived_at = now() WHERE id = $1`, [row.id]);
+  const archived = await q1<{ archived_at: Date }>(`UPDATE ${ENTITY_TABLES[type]} SET archived_at = date_trunc('milliseconds', now()) WHERE id = $1 RETURNING archived_at`, [row.id]);
+  if (type === 'event' && row.is_plan && !row.archived_at) await archivePlanParts(row.id, archived!.archived_at);
   await logActivity(row.workspace_id, type, row.id, a.user.id, 'archived', 'Archived');
   return c.json({ ok: true });
 });
@@ -211,6 +267,7 @@ entityRoutes.post('/entities/:type/:id/unarchive', async (c) => {
   const row = await loadEntity<any>(a, type, c.req.param('id'));
   if (type === 'receipt') throw badRequest('Receipts cannot be archived');
   await q(`UPDATE ${ENTITY_TABLES[type]} SET archived_at = NULL WHERE id = $1`, [row.id]);
+  if (type === 'event' && row.is_plan && row.archived_at) await archivePlanParts(row.id, null, row.archived_at);
   if (type === 'task' && row.status === 'archived') await q(`UPDATE tasks SET status = 'todo' WHERE id = $1`, [row.id]);
   await logActivity(row.workspace_id, type, row.id, a.user.id, 'restored', 'Restored from archive');
   return c.json({ ok: true });

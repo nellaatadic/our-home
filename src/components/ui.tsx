@@ -2,20 +2,29 @@ import { createContext, useContext, useEffect, useRef, useState, type ReactNode 
 import { X } from 'lucide-react';
 
 // ------------------------------------------------------------------ toast
-type Toast = { id: number; text: string; tone: 'ok' | 'error' };
-const ToastCtx = createContext<(text: string, tone?: 'ok' | 'error') => void>(() => {});
+type ToastAction = { label: string; run: () => void | Promise<void> };
+type Toast = { id: number; text: string; tone: 'ok' | 'error'; action?: ToastAction };
+type Push = (text: string, opt?: 'ok' | 'error' | ToastAction) => void;
+const ToastCtx = createContext<Push>(() => {});
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const push = (text: string, tone: 'ok' | 'error' = 'ok') => {
+  const push: Push = (text, opt) => {
     const id = Date.now() + Math.random();
-    setToasts((t) => [...t, { id, text, tone }]);
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), tone === 'error' ? 6000 : 3000);
+    const tone = opt === 'error' ? 'error' : 'ok';
+    const action = typeof opt === 'object' ? opt : undefined;
+    setToasts((t) => [...t, { id, text, tone, action }]);
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), tone === 'error' || action ? 6000 : 3000);
   };
   return (
     <ToastCtx.Provider value={push}>
       {children}
       <div className="toasts" role="status" aria-live="polite">
-        {toasts.map((t) => <div key={t.id} className={`toast ${t.tone}`}>{t.text}</div>)}
+        {toasts.map((t) => (
+          <div key={t.id} className={`toast ${t.tone}`}>
+            {t.text}
+            {t.action && <button className="toast-action" onClick={() => { setToasts((x) => x.filter((y) => y.id !== t.id)); t.action!.run(); }}>{t.action.label}</button>}
+          </div>
+        ))}
       </div>
     </ToastCtx.Provider>
   );

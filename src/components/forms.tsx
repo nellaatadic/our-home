@@ -236,6 +236,7 @@ export function EventForm({ event, initial, space: initialSpace, onSaved, onCanc
       location: f.location ?? '', description: f.description ?? '', notes: f.notes ?? '', category: f.category || null, for_user_id: f.for_user_id || null,
       participants: String(f.participantsText ?? '').split(',').map((s: string) => s.trim()).filter(Boolean),
       yearly: Boolean(f.yearly),
+      is_plan: Boolean(f.is_plan),
       ...(event ? {} : { source_type: initial?.from_text ? 'text' : 'manual' }),
     };
     const saved = event ? (await api.patch(`/events/${event.id}`, body)).event : (await api.post(`/spaces/${space}/events`, body)).event;
@@ -260,6 +261,8 @@ export function EventForm({ event, initial, space: initialSpace, onSaved, onCanc
           <datalist id="event-categories">{['Birthday', 'Anniversary', 'Social', 'Holiday', 'Important', 'Health', 'Work', 'Travel'].map((c) => <option key={c} value={c} />)}</datalist>
         </Field>
         <label className="check"><input type="checkbox" checked={Boolean(f.yearly)} onChange={(e) => set('yearly', e.target.checked)} /> Repeats every year</label>
+        <label className="check plan-check"><input type="checkbox" checked={Boolean(f.is_plan)} onChange={(e) => set('is_plan', e.target.checked)} />
+          <span><b>Plan</b> <span className="muted small">Gets its own page with a checklist (book a table, buy a gift…), lists and its chat</span></span></label>
         <Field label="Participants" hint="Comma separated"><input value={f.participantsText ?? ''} onChange={(e) => set('participantsText', e.target.value)} /></Field>
         <Field label="Who is this about?">
           <select value={f.for_user_id ?? ''} onChange={(e) => set('for_user_id', e.target.value || null)}>

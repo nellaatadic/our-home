@@ -1,22 +1,26 @@
 import { useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { CalendarDays, ChevronDown, ChevronRight, CheckSquare, Hash, Lock, MessagesSquare, Plus, Search } from 'lucide-react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { CalendarDays, ChevronDown, ChevronRight, CheckSquare, ClipboardList, Hash, Lock, MessagesSquare, Plus, Search, StickyNote } from 'lucide-react';
 import { api, emitChange, useApi } from '../lib/api';
 import { useMe } from '../lib/session';
 import { relative } from '../lib/format';
 import { listByModule } from '../lib/lists';
 import { previewText, Thread } from '../components/Thread';
-import { useOpen } from '../components/Layout';
+import { cardPath, useOpen } from '../components/Layout';
+import { Linked } from '../components/Linked';
+import { useLists } from '../lib/useLists';
 import { Empty, Field, Loading, Sheet, useAction } from '../components/ui';
 
-interface Card { entity_type: string; entity_id: string; title: string; module: string | null; space: 'me' | 'us'; total: number; unread: number; last_at: string; last_body: string; last_author: string | null }
+interface Card { entity_type: string; entity_id: string; title: string; module: string | null; list_id: string | null; is_plan: boolean; space: 'me' | 'us'; total: number; unread: number; last_at: string; last_body: string; last_author: string | null }
 
 function CardIcon({ c }: { c: Card }) {
+  const { lists } = useLists();
   if (c.entity_type === 'item' && c.module) {
-    const l = listByModule(c.module);
-    return <span className="list-icon tiny" style={{ background: l.color }} aria-hidden>{l.emoji}</span>;
+    const l = (c.module === 'custom' ? lists.find((x) => x.id === c.list_id) : null) ?? listByModule(c.module);
+    return <span className="list-icon tiny" style={{ background: l.color }} aria-hidden>{c.module === 'custom' && !lists.find((x) => x.id === c.list_id) ? '📝' : l.emoji}</span>;
   }
-  if (c.entity_type === 'event') return <CalendarDays size={15} className="muted" aria-hidden />;
+  if (c.entity_type === 'event') return c.is_plan ? <ClipboardList size={15} className="muted" aria-hidden /> : <CalendarDays size={15} className="muted" aria-hidden />;
+  if (c.entity_type === 'pin') return <StickyNote size={15} className="muted" aria-hidden />;
   if (c.entity_type === 'task') return <CheckSquare size={15} className="muted" aria-hidden />;
   return <Hash size={15} className="muted" aria-hidden />;
 }
@@ -29,6 +33,7 @@ function CardIcon({ c }: { c: Card }) {
 export function ChatPage() {
   const me = useMe();
   const open = useOpen();
+  const nav = useNavigate();
   const [params, setParams] = useSearchParams();
   const [q, setQ] = useState('');
   const { data, loading } = useApi<{ cards: Card[] }>(`/chat/cards${q.trim() ? `?q=${encodeURIComponent(q.trim())}` : ''}`);
@@ -85,8 +90,13 @@ export function ChatPage() {
                     {!isOpen && c.last_body && <p className="chat-card-last clamp1">{c.last_author ? `${c.last_author === me.user.display_name ? 'You' : c.last_author}: ` : ''}{previewText(c.last_body)} <span className="muted">· {relative(c.last_at)}</span></p>}
                     {isOpen && (
                       <div className="chat-card-body">
+                        <Linked type={c.entity_type} id={c.entity_id} compact />
                         <Thread type={c.entity_type} id={c.entity_id} space={c.space} compact placeholder="Reply… (@ to link a card)" />
-                        {c.entity_type !== 'topic' && <button className="link-btn" onClick={() => open(c.entity_type as any, c.entity_id)}>Open {c.entity_type === 'item' ? 'item' : c.entity_type === 'event' ? 'event' : 'to-do'}</button>}
+                        {c.entity_type !== 'topic' && (
+                          <button className="link-btn" onClick={() => { const p = cardPath(c.entity_type, c.entity_id, { is_plan: c.is_plan }); if (p) nav(p); else open(c.entity_type as any, c.entity_id); }}>
+                            Open {c.entity_type === 'item' ? 'item' : c.entity_type === 'pin' ? 'on the Board' : c.entity_type === 'event' ? (c.is_plan ? 'plan' : 'event') : 'to-do'}
+                          </button>
+                        )}
                       </div>
                     )}
                   </li>

@@ -2,7 +2,7 @@
 
 Run on 2026-11-19 (after the lists / chat / dashboard redesign) with `npm test` (Vitest 5, Node 22, PostgreSQL 16 on localhost). The tests drive the real Hono API (`app.fetch`) against a real Postgres database, using two distinct user accounts per household and separate households for isolation tests. Google is replaced by an in-memory fake of the OAuth and Calendar v3 endpoints (`tests/google-mock.ts`). The fake records every request, so the tests can prove that no write calls reach a source calendar. AI is turned off (`AI_FEATURES=off`), so the built-in parsers are what gets tested.
 
-**Result: 6 test files, 54 tests, all passing.**
+**Result: 7 test files, 62 tests, all passing** (run again on 2026-11-20 after the phone-first redesign: list chats, event pop-ups).
 
 | Area | File |
 |---|---|
@@ -11,6 +11,7 @@ Run on 2026-11-19 (after the lists / chat / dashboard redesign) with `npm test` 
 | Scenarios C, D, E; natural-language parser with a fixed clock | `tests/calendar.test.ts` |
 | Scenario F, groceries NEED→STOCK, comparisons, inventory, expenses; receipt parser, time zones, SSRF guard, link metadata | `tests/lists-receipts.test.ts` |
 | Redesign: Toronto/CAD defaults; shared-unless-locked (locking moves chat, photos, subtasks; only the creator can lock); NEED/STOCK on all lists; search and filters; moving lists; repeating items; dated-item reminders; general chat, card references, conversation cards, private topics; yearly birthdays and important dates; opt-in Busy blocks; dashboard widget settings; data page privacy | `tests/redesign.test.ts` |
+| Board, plans and custom lists: making, filling, archiving, restoring and deleting lists; private lists; locked items in shared lists; pins (running names, clamped positions, photos, locking, references, archive); plans (checklist, plan lists, links in and out, same-tag cards, archive prompt, archiving and restoring together); main-chat replies copied into cards (edits, deletions, unread counts, no copies into cards the replier can't open) | `tests/board-plans.test.ts` |
 | UI interaction (jsdom + Testing Library): the Share with US dialog | `tests/ui/share-dialog.test.tsx` |
 
 ## Detailed results
@@ -86,3 +87,18 @@ Checked in the running app as Nella with local demo data, at desktop (1440 px) a
 - Item details: Reminders-style groups (date, time, urgent, repeat, early reminder, list, section, tags, subtasks, flag, priority, amount, privacy, photos).
 - Chat: conversation cards, inline expansion, ongoing chat with card link.
 - Calendar: day, week and month views. Data: spending, open topics, grocery habits, calendar load.
+
+## Board, plans, lists and Paper theme: manual checks in the browser (2026-11-20)
+
+Checked as Nella at 1440 px and 375 px wide:
+- Paper theme on the dashboard, lists, chat, plan page and Board (Fraunces headings, Inter Tight text, terracotta accent).
+- Made a list (“Books to read”) and added to it; it shows in the sidebar, on the dashboard and in the share page.
+- Board: stickies, words, a moved sticky is saved; @-linking a pin from the side chat and clicking the link jumps to the pin; on a phone pins stack in one column.
+- Plan page for “Dinner with Marco”: checklist, a plan list, the Linked strip, and a reply in Our chat copied into the plan's chat.
+- Share page with a link inside shared text: the link is found, and “Home & Gadgets” adds it as an item.
+
+Not checked: the share menu on a real Android or iPhone (needs the deployed HTTPS site), photo pins with real camera images, and two people dragging the same pin at once (the last move wins).
+
+## Phone-first redesign: manual checks (2026-11-20)
+
+At 375 px and on a desktop window: Home cards with previews and in-place expanding, the Groceries chat sliding in with its message box across the bottom, swiping an item to reveal Flag and Urgent, the calendar's week strip and event cards, the event pop-up (details, checklist, its list, chat), the Board as two columns of stickies on a phone, the notifications pop-up opening an item's chat in place. Not checked on a real phone.

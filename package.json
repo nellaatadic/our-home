@@ -19,6 +19,8 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.10.0",
+    "@fontsource-variable/inter-tight": "^5.3.0",
+    "@fontsource-variable/source-serif-4": "^5.3.1",
     "@hono/node-server": "^2.1.9",
     "@netlify/blobs": "^11.1.9",
     "@netlify/database": "^2.0.3",

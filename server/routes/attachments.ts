@@ -8,7 +8,7 @@ import { logActivity } from '../lib/notify.js';
 
 export const attachmentRoutes = new Hono<AppEnv>();
 export const PENDING_ID = '00000000-0000-0000-0000-000000000000';
-const OWNER_TYPES = ['item', 'task', 'event', 'inventory', 'expense'] as const;
+const OWNER_TYPES = ['item', 'task', 'event', 'inventory', 'expense', 'pin'] as const;
 
 export async function readUpload(file: unknown) {
   if (!(file instanceof File)) throw badRequest('Choose a file to upload');

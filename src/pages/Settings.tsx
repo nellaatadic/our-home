@@ -74,6 +74,8 @@ export function SettingsPage() {
         <p className="muted small">Only the time is shown, never the title, place or notes. Off by default. The dashboard and day view then show both schedules side by side.</p>
       </section>
 
+      <ShareSetup />
+
       <section className="card" id="dashboard">
         <h2>Dashboard</h2>
         <p className="muted small">Use the ⋯ button on each list on the dashboard to change how many items it shows and its size, or to hide it.</p>
@@ -94,5 +96,43 @@ export function SettingsPage() {
 
       <button className="btn ghost" onClick={logout}>Sign out</button>
     </div>
+  );
+}
+
+/** How to send links and text into OUR HOME from other apps without copying and pasting. */
+function ShareSetup() {
+  const toast = useToast();
+  const origin = window.location.origin;
+  const shortcutUrl = `${origin}/share?text=`;
+  const bookmarklet = `javascript:(()=>{window.open('${origin}/share?url='+encodeURIComponent(location.href)+'&title='+encodeURIComponent(document.title),'_blank')})()`;
+  const copy = (text: string, what: string) => navigator.clipboard.writeText(text).then(() => toast(`${what} copied`), () => toast('Copy it by selecting the text'));
+  return (
+    <section className="card" id="share">
+      <h2>Share from other apps</h2>
+      <p className="muted small">Send a link or text straight into OUR HOME from Safari, Instagram, Messages or any app with a Share button. OUR HOME then asks where it should go: a list, a to-do, the calendar, the Board, Our chat or a plan.</p>
+      <details open>
+        <summary><b>iPhone and iPad</b> (one-time Shortcut, about two minutes)</summary>
+        <ol className="steps">
+          <li>Open the <b>Shortcuts</b> app and tap <b>+</b>. Name the shortcut <b>Add to OUR HOME</b>.</li>
+          <li>Tap the <b>ⓘ</b> button (or the shortcut’s name) and turn on <b>Show in Share Sheet</b>. Under “Receive”, choose <b>URLs</b> and <b>Text</b>.</li>
+          <li>Add the action <b>URL Encode</b> and set it to encode the <b>Shortcut Input</b>.</li>
+          <li>Add the action <b>Text</b> and paste this, then put the <b>URL Encoded Text</b> variable right after it:
+            <div className="copy-row"><code>{shortcutUrl}</code><button className="btn small" onClick={() => copy(shortcutUrl, 'Address')}>Copy</button></div>
+          </li>
+          <li>Add the action <b>Open URLs</b>. Done.</li>
+        </ol>
+        <p className="muted small">Now tap <b>Share</b> in any app and choose <b>Add to OUR HOME</b>. For the smoothest result, first add OUR HOME to your Home Screen from Safari (Share → Add to Home Screen) and stay signed in.</p>
+      </details>
+      <details>
+        <summary><b>Android</b></summary>
+        <p className="small">Open OUR HOME in Chrome, tap ⋮ → <b>Install app</b> (or <b>Add to Home screen</b>). OUR HOME then appears in the Share menu of every app by itself.</p>
+      </details>
+      <details>
+        <summary><b>Computer</b></summary>
+        <p className="small">Make a new bookmark in your browser and paste this as its address. Clicking the bookmark on any page sends that page here.</p>
+        <div className="copy-row"><code className="clamp1">{bookmarklet}</code><button className="btn small" onClick={() => copy(bookmarklet, 'Bookmark')}>Copy</button></div>
+      </details>
+      <p className="muted tiny">Try it: <Link to={`/share?url=${encodeURIComponent('https://example.com/')}&title=${encodeURIComponent('A page to save')}`}>open the share page with an example link</Link>.</p>
+    </section>
   );
 }

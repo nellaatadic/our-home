@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlarmClock, Check, Flag, Lock, MessageSquare, MessageSquarePlus, Receipt, Repeat, Undo2 } from 'lucide-react';
+import { Check, Flag, Lock, MessageSquare, MessageSquarePlus, MoreHorizontal, Receipt, Repeat, Undo2, X } from 'lucide-react';
 import { api, emitChange } from '../lib/api';
 import { useMe } from '../lib/session';
 import { dueLabel, qty, todayLocal } from '../lib/format';
@@ -35,13 +35,26 @@ export function QuickChat({ item, onClose }: { item: any; onClose: () => void })
   );
 }
 
+/**
+ * One item. Swipe right for Flag and Urgent, swipe left for Details and
+ * Remove (works with a finger or by dragging the mouse). Grocery items have
+ * no chat of their own: the whole Groceries list has one chat instead.
+ */
 export function ItemRow({ item, onCheck, compact, showList }: { item: any; onCheck: () => void; compact?: boolean; showList?: string }) {
   const me = useMe();
   const open = useOpen();
+  const toast = useToast();
+  const { run } = useAction();
   const [chat, setChat] = useState(false);
+  const [dx, setDx] = useState(0);
+  const [openSide, setOpenSide] = useState<'left' | 'right' | null>(null);
+  const drag = useRef<{ x: number; y: number; base: number; moved: boolean; locked?: 'h' | 'v' } | null>(null);
+  const rowRef = useRef<HTMLLIElement>(null);
   const today = todayLocal(me.household.timezone);
   const need = item.grocery_state === 'need';
   const overdue = item.due_date && item.due_date < today && need;
+  const canChat = item.module !== 'grocery';
+  const ACTIONS = 128;
   const meta = [
     item.due_date && <span key="d" className={overdue ? 'overdue' : item.due_date === today ? 'today' : ''}>{dueLabel(item.due_date, item.due_time, today)}</span>,
     item.repeat_unit && <Repeat key="r" size={11} aria-label="Repeats" />,
@@ -50,26 +63,92 @@ export function ItemRow({ item, onCheck, compact, showList }: { item: any; onChe
     !compact && item.notes && <span key="n" className="clamp1 note-preview">{item.notes}</span>,
     showList && <span key="l">{showList}</span>,
   ].filter(Boolean);
+
+  // Close the actions when tapping anywhere else.
+  useEffect(() => {
+    if (!openSide) return;
+    const onDown = (e: PointerEvent) => { if (!rowRef.current?.contains(e.target as Node)) { setOpenSide(null); setDx(0); } };
+    document.addEventListener('pointerdown', onDown);
+    return () => document.removeEventListener('pointerdown', onDown);
+  }, [openSide]);
+
+  const onDown = (e: React.PointerEvent) => {
+    if (e.button !== 0 || (e.target as HTMLElement).closest('.swipe-actions')) return;
+    drag.current = { x: e.clientX, y: e.clientY, base: dx, moved: false };
+  };
+  const onMove = (e: React.PointerEvent) => {
+    const d = drag.current;
+    if (!d) return;
+    const mx = e.clientX - d.x;
+    const my = e.clientY - d.y;
+    if (!d.locked && (Math.abs(mx) > 8 || Math.abs(my) > 8)) {
+      d.locked = Math.abs(mx) > Math.abs(my) ? 'h' : 'v';
+      if (d.locked === 'h') (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    }
+    if (d.locked !== 'h') return;
+    d.moved = true;
+    setDx(Math.max(-ACTIONS - 24, Math.min(ACTIONS + 24, d.base + mx)));
+  };
+  const onUp = () => {
+    const d = drag.current;
+    drag.current = null;
+    if (!d?.moved) return;
+    if (dx > ACTIONS / 2) { setDx(ACTIONS); setOpenSide('left'); }
+    else if (dx < -ACTIONS / 2) { setDx(-ACTIONS); setOpenSide('right'); }
+    else { setDx(0); setOpenSide(null); }
+  };
+  // A swipe should not also count as a tap on the row.
+  const guard = (fn: () => void) => () => { if (openSide || Math.abs(dx) > 4) { setDx(0); setOpenSide(null); return; } fn(); };
+  const shut = () => { setDx(0); setOpenSide(null); };
+  const patch = (body: any, msg: string) => run(async () => { await api.patch(`/items/${item.id}`, body); shut(); emitChange(); }, msg);
+  const remove = () => run(async () => {
+    await api.post(`/entities/item/${item.id}/archive`);
+    shut();
+    emitChange();
+    toast(`Removed “${item.title}”`, { label: 'Undo', run: async () => { await api.post(`/entities/item/${item.id}/unarchive`); emitChange(); } });
+  });
+
   return (
-    <li className={`item-row ${need ? '' : 'stocked'} ${item.urgent ? 'urgent' : ''}`}>
-      <button className={`circle ${need ? '' : 'on'}`} onClick={onCheck} aria-label={need ? `Mark ${item.title} as bought` : `We ran out of ${item.title}`} title={need ? 'Bought' : 'We ran out'}>
-        {need ? <Check size={12} /> : <Undo2 size={12} />}
-      </button>
-      <button className="item-main" onClick={() => open('item', item.id)}>
-        <span className="item-title">
-          {item.urgent && <AlarmClock size={13} className="urgent-icon" aria-label="Urgent" />}
-          {item.priority === 'high' || item.priority === 'urgent' ? <span className="bangs" aria-label={`${item.priority} priority`}>{item.priority === 'urgent' ? '!!!' : '!!'}</span> : null}
-          {item.title}
-        </span>
-        {meta.length > 0 && <span className="item-meta">{meta}</span>}
-      </button>
-      <span className="item-side">
-        {item.flagged && <Flag size={14} className="flag" aria-label="Flagged" fill="currentColor" />}
-        {item.private && <Lock size={13} className="muted" aria-label="Private" />}
-        <button className={`comment-btn ${item.thread?.unread ? 'unread' : ''}`} onClick={() => setChat(true)} aria-label={`Comment on ${item.title}${item.thread?.total ? ` (${item.thread.total} messages)` : ''}`} title="Comment">
-          {item.thread?.total ? <><MessageSquare size={15} /><small>{item.thread.total}</small></> : <MessageSquarePlus size={15} />}
+    <li ref={rowRef} className={`item-row swipeable ${need ? '' : 'stocked'} ${item.urgent ? 'urgent' : ''} ${openSide ? 'swiped' : ''} ${dx > 0 ? 'show-left' : dx < 0 ? 'show-right' : ''}`}>
+      <div className="swipe-actions left" aria-hidden={openSide !== 'left'}>
+        <button className="sa flag" onClick={() => patch({ flagged: !item.flagged }, item.flagged ? 'Unflagged' : 'Flagged')} aria-label={item.flagged ? 'Remove flag' : 'Flag'} tabIndex={openSide === 'left' ? 0 : -1}>
+          <Flag size={17} fill={item.flagged ? 'currentColor' : 'none'} /><small>{item.flagged ? 'Unflag' : 'Flag'}</small>
         </button>
-      </span>
+        <button className="sa urgent" onClick={() => patch({ urgent: !item.urgent }, item.urgent ? 'Not urgent any more' : 'Marked urgent')} aria-label={item.urgent ? 'Not urgent' : 'Urgent'} tabIndex={openSide === 'left' ? 0 : -1}>
+          <b>!</b><small>{item.urgent ? 'Not urgent' : 'Urgent'}</small>
+        </button>
+      </div>
+      <div className="swipe-actions right" aria-hidden={openSide !== 'right'}>
+        <button className="sa details" onClick={() => { shut(); open('item', item.id); }} aria-label="Details" tabIndex={openSide === 'right' ? 0 : -1}>
+          <MoreHorizontal size={17} /><small>Details</small>
+        </button>
+        <button className="sa remove" onClick={remove} aria-label="Remove" tabIndex={openSide === 'right' ? 0 : -1}>
+          <X size={17} /><small>Remove</small>
+        </button>
+      </div>
+      <div className="swipe-track" style={{ transform: `translateX(${dx}px)`, transition: drag.current?.moved ? 'none' : undefined }}
+        onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}>
+        <button className={`circle ${need ? '' : 'on'}`} onClick={guard(onCheck)} aria-label={need ? `Mark ${item.title} as done` : `Back on the list: ${item.title}`} title={need ? 'Done' : 'Back on the list'}>
+          {need ? <Check size={12} /> : <Undo2 size={12} />}
+        </button>
+        <button className="item-main" onClick={guard(() => open('item', item.id))}>
+          <span className="item-title">
+            {item.urgent && <span className="urgent-mark" aria-label="Urgent">!</span>}
+            {item.priority === 'high' || item.priority === 'urgent' ? <span className="bangs" aria-label={`${item.priority} priority`}>{item.priority === 'urgent' ? '!!!' : '!!'}</span> : null}
+            {item.title}
+          </span>
+          {meta.length > 0 && <span className="item-meta">{meta}</span>}
+        </button>
+        <span className="item-side">
+          {item.flagged && <Flag size={14} className="flag" aria-label="Flagged" fill="currentColor" />}
+          {item.private && <Lock size={13} className="muted" aria-label="Private" />}
+          {canChat && (
+            <button className={`comment-btn ${item.thread?.unread ? 'unread' : ''}`} onClick={guard(() => setChat(true))} aria-label={`Comment on ${item.title}${item.thread?.total ? ` (${item.thread.total} messages)` : ''}`} title="Comment">
+              {item.thread?.total ? <><MessageSquare size={15} /><small>{item.thread.total}</small></> : <MessageSquarePlus size={15} />}
+            </button>
+          )}
+        </span>
+      </div>
       {chat && <QuickChat item={item} onClose={() => { setChat(false); emitChange(); }} />}
     </li>
   );

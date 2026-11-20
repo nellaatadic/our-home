@@ -116,6 +116,8 @@ taskRoutes.post('/spaces/:space/tasks', async (c) => {
     [ws, a.user.id, ...keys.map((k) => cols[k])],
   );
   await logActivity(ws, 'task', row.id, a.user.id, 'created', `Created task “${row.title}”`);
+  // A to-do for an event makes the event a plan (it then shows its checklist and asks to be archived when over).
+  if (row.related_event_id) await q('UPDATE events SET is_plan = true WHERE id = $1 AND NOT is_plan', [row.related_event_id]);
   await notifyAssignment(a, row);
   return c.json({ task: (await serializeTasks(a, [row]))[0] }, 201);
 });

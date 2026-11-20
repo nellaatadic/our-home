@@ -4,6 +4,8 @@ import { BrowserRouter } from 'react-router-dom';
 import { App } from './App';
 import { SessionProvider } from './lib/session';
 import { ToastProvider } from './components/ui';
+import '@fontsource-variable/source-serif-4/opsz.css';
+import '@fontsource-variable/inter-tight/index.css';
 import './styles.css';
 
 createRoot(document.getElementById('root')!).render(

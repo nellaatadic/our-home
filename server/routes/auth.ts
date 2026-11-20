@@ -223,7 +223,7 @@ householdRoutes.patch('/settings', async (c) => {
       notify_decisions: z.boolean().optional(), dashboard_sections: z.array(z.enum(SECTIONS)).max(10).optional(),
       share_availability: z.boolean().optional(),
       dashboard: z.object({
-        widgets: z.partialRecord(z.enum(['grocery', 'home', 'idea']), z.object({
+        widgets: z.record(z.string().regex(/^(grocery|home|idea|[0-9a-f-]{36})$/), z.object({
           max: z.number().int().min(1).max(20), size: z.enum(['s', 'm', 'l']), hidden: z.boolean().optional(),
         })).optional(),
       }).optional(),

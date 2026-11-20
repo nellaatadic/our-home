@@ -1,4 +1,4 @@
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { AtSign, Bell, CalendarDays, CheckSquare, MessageCircle, Share2, Sparkles } from 'lucide-react';
 import { api, emitChange, useApi } from '../lib/api';
 import { relative } from '../lib/format';
@@ -8,25 +8,42 @@ const ICON: Record<string, React.ReactNode> = {
   mention: <AtSign size={16} />, reply: <MessageCircle size={16} />, shared: <Share2 size={16} />, assigned: <CheckSquare size={16} />,
   reminder: <Bell size={16} />, calendar: <CalendarDays size={16} />, decision: <Sparkles size={16} />,
 };
-const PATH: Record<string, string> = { item: '/', task: '/', event: '/calendar', inventory: '/', expense: '/data' };
+export const NOTIF_ICON = ICON;
 
-export function NotificationsPage() {
-  const { data, reload } = useApi<{ notifications: any[]; unread: number }>('/notifications');
+/**
+ * Open what a notification is about without leaving the page where possible:
+ * items, to-dos and events open as a pop-up on top of the current screen.
+ */
+export function useNotificationGo(onDone?: () => void) {
   const nav = useNavigate();
+  const loc = useLocation();
   const { run } = useAction();
-  const go = (n: any) => run(async () => {
+  return (n: any) => run(async () => {
     await api.post('/notifications/read', { ids: [n.id] });
     emitChange();
-    if (n.entity_type === 'topic') nav(`/chat?topic=${n.entity_id}`);
-    else if (n.entity_type && n.entity_id && (n.type === 'mention' || n.type === 'reply')) nav(`/chat?open=${n.entity_type}:${n.entity_id}:chat`);
-    else if (n.entity_type && n.entity_id) nav(`${PATH[n.entity_type] ?? '/'}?open=${n.entity_type}:${n.entity_id}`);
-    else reload();
+    onDone?.();
+    const chat = n.type === 'mention' || n.type === 'reply';
+    if (!n.entity_type || !n.entity_id) return;
+    if (n.entity_type === 'topic') return nav(`/chat?topic=${n.entity_id}`);
+    if (n.entity_type === 'list') return nav(`/?chat=${n.entity_id}`);
+    if (n.entity_type === 'pin') return nav(`/board?pin=${n.entity_id}`);
+    if (n.entity_type === 'expense') return nav('/data');
+    const base = loc.pathname === '/notifications' ? '/' : loc.pathname;
+    const params = new URLSearchParams(loc.pathname === '/notifications' ? '' : loc.search);
+    params.set('open', `${n.entity_type}:${n.entity_id}${chat ? ':chat' : ''}`);
+    nav(`${base}?${params}`);
   });
+}
+
+export function NotificationsPage() {
+  const { data } = useApi<{ notifications: any[]; unread: number }>('/notifications');
+  const { run } = useAction();
+  const go = useNotificationGo();
   if (!data) return <div className="page"><Loading /></div>;
   return (
     <div className="page narrow">
       <header className="page-head">
-        <h1>Notifications</h1>
+        <h1>Activity</h1>
         {data.unread > 0 && <button className="btn small ghost" onClick={() => run(async () => { await api.post('/notifications/read', { all: true }); emitChange(); })}>Mark all read</button>}
       </header>
       {data.notifications.length ? (

@@ -27,6 +27,8 @@ export const eventInput = z.object({
   for_user_id: uuid.nullish(),
   source_type: z.enum(['manual', 'text']).optional(),
   yearly: z.boolean().optional(),
+  is_plan: z.boolean().optional(),
+  tags: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
 });
 
 /** Convert form fields (local wall-clock in household tz) to stored columns. */
@@ -50,7 +52,8 @@ export function eventColumns(b: Partial<z.infer<typeof eventInput>>, tz: string,
     }
     Object.assign(cols, { starts_at: starts, ends_at: ends, time_unspecified: false, end_date: ends ? utcToZoned(ends, tz).date : endDate ?? date });
   }
-  for (const k of ['title', 'location', 'description', 'notes', 'participants', 'category', 'for_user_id', 'yearly'] as const) if (b[k] !== undefined) cols[k] = b[k];
+  for (const k of ['title', 'location', 'description', 'notes', 'participants', 'category', 'for_user_id', 'yearly', 'is_plan'] as const) if (b[k] !== undefined) cols[k] = b[k];
+  if (b.tags !== undefined) cols.tags = [...new Set(b.tags.map((t) => t.trim()).filter(Boolean))];
   return cols;
 }
 

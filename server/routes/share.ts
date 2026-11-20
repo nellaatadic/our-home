@@ -90,7 +90,7 @@ async function remapCategory(a: Auth, categoryId: string | null) {
   if (!cat) return null;
   const row = await q1<{ id: string }>(
     `INSERT INTO categories (workspace_id, module, group_name, name, color) VALUES ($1,$2,$3,$4,$5)
-     ON CONFLICT (workspace_id, module, lower(name)) DO UPDATE SET name = categories.name RETURNING id`,
+     ON CONFLICT (workspace_id, module, lower(name)) WHERE list_id IS NULL DO UPDATE SET name = categories.name RETURNING id`,
     [a.sharedWorkspaceId, cat.module, cat.group_name, cat.name, cat.color],
   );
   return row!.id;

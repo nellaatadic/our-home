@@ -43,7 +43,7 @@ export function addDays(date: string, n: number) {
 export function eventTime(e: { all_day: boolean; time_unspecified: boolean; start_time: string | null; end_time: string | null }) {
   if (e.all_day) return 'All day';
   if (e.time_unspecified || !e.start_time) return 'Time not set';
-  return e.end_time ? `${e.start_time}–${e.end_time}` : e.start_time;
+  return e.end_time ? `${time12(e.start_time)} – ${time12(e.end_time)}` : time12(e.start_time);
 }
 
 export function qty(n: number | null | undefined, unit?: string | null) {

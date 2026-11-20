@@ -1,17 +1,17 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { CornerUpLeft, Hash, Paperclip, Pencil, Send, Trash2, X } from 'lucide-react';
+import { CornerUpLeft, Hash, MessagesSquare, Paperclip, Pencil, Send, Trash2, X } from 'lucide-react';
 import { api, emitChange, useApi } from '../lib/api';
 import { useMe } from '../lib/session';
 import { relative } from '../lib/format';
 import { prepareUpload } from '../lib/image';
 import { REF_RE } from '../lib/lists';
 import { Loading, useAction } from './ui';
-import { useOpen } from './Layout';
+import { cardPath, useOpen } from './Layout';
 
 interface Msg {
   id: string; author_id: string; author_name: string; body: string; reply_to_id: string | null; created_at: string;
-  edited_at: string | null; deleted_at: string | null; mention_ids: string[]; attachments: { id: string; filename: string; content_type: string; url: string }[];
+  edited_at: string | null; deleted_at: string | null; mention_ids: string[]; mirrored_from_id?: string | null; attachments: { id: string; filename: string; content_type: string; url: string }[];
 }
 interface Suggestion { kind: 'person' | 'card'; label: string; sub?: string; insert: string }
 
@@ -22,7 +22,7 @@ export function RefChip({ type, id, title }: { type: string; id: string; title: 
   const open = useOpen();
   const nav = useNavigate();
   return (
-    <button type="button" className="ref-chip" onClick={() => (type === 'topic' ? nav(`/chat?topic=${id}`) : open(type as any, id))} title={`Open “${title}”`}>
+    <button type="button" className={`ref-chip ref-${type}`} onClick={() => { const p = cardPath(type, id); if (p) nav(p); else open(type as any, id); }} title={`Open “${title}”`}>
       <Hash size={11} aria-hidden />{title}
     </button>
   );
@@ -169,7 +169,8 @@ export function Thread({ type, id, space, compact, autoFocus, placeholder }: {
           const unread = !mine && new Date(m.created_at).getTime() > lastRead;
           return (
             <li key={m.id} className={`msg ${mine ? 'mine' : ''} ${unread ? 'unread' : ''}`}>
-              <div className="msg-meta"><b>{mine ? 'You' : m.author_name ?? 'Former member'}</b> <span className="muted">{relative(m.created_at)}{m.edited_at && !m.deleted_at ? ' · edited' : ''}</span></div>
+              <div className="msg-meta"><b>{mine ? 'You' : m.author_name ?? 'Former member'}</b> <span className="muted">{relative(m.created_at)}{m.edited_at && !m.deleted_at ? ' · edited' : ''}</span>
+                {m.mirrored_from_id && <span className="from-main" title="Copied from Our chat, where it was written"><MessagesSquare size={11} /> Our chat</span>}</div>
               {parent && <div className="msg-quote">↪ {parent.deleted_at ? 'Deleted message' : `${parent.author_name}: ${previewText(parent.body).slice(0, 80)}`}</div>}
               {m.deleted_at ? <div className="msg-body muted"><i>Message deleted</i></div> : editing === m.id ? (
                 <div className="msg-edit">
@@ -192,8 +193,8 @@ export function Thread({ type, id, space, compact, autoFocus, placeholder }: {
               {!m.deleted_at && (
                 <div className="msg-actions">
                   <button className="link-btn" onClick={() => { setReplyTo(m); inputRef.current?.focus(); }} aria-label="Reply"><CornerUpLeft size={13} /> Reply</button>
-                  {mine && <button className="link-btn" onClick={() => { setEditing(m.id); setEditBody(m.body); }} aria-label="Edit"><Pencil size={13} /></button>}
-                  {mine && <button className="link-btn" onClick={() => run(async () => { await api.del(`/messages/${m.id}`); await reload(); })} aria-label="Delete"><Trash2 size={13} /></button>}
+                  {mine && !m.mirrored_from_id && <button className="link-btn" onClick={() => { setEditing(m.id); setEditBody(m.body); }} aria-label="Edit"><Pencil size={13} /></button>}
+                  {mine && !m.mirrored_from_id && <button className="link-btn" onClick={() => run(async () => { await api.del(`/messages/${m.id}`); await reload(); })} aria-label="Delete"><Trash2 size={13} /></button>}
                 </div>
               )}
             </li>

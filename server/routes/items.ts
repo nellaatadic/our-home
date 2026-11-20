@@ -7,11 +7,14 @@ import { badRequest, dateStr, notFound, optText, optUrl, parse, priority, space,
 import { decorate } from '../lib/serialize.js';
 import { logActivity, notify } from '../lib/notify.js';
 import { fetchLinkPreview } from '../lib/linkpreview.js';
+import { LIST_NAMES } from '../lib/defaults.js';
 import { addDays, addMonths, todayIn, zonedToUtc } from '../lib/time.js';
 
 export const itemRoutes = new Hono<AppEnv>();
 
 export const MODULE = z.enum(['grocery', 'home', 'idea']);
+/** Built-in lists plus lists the household made itself ('custom', identified by list_id). */
+export const ANY_MODULE = z.enum(['grocery', 'home', 'idea', 'custom']);
 const DECISION = z.enum(['idea', 'considering', 'discussing', 'approved', 'purchased', 'rejected']);
 const STAGE = z.enum(['suggested', 'preferred', 'agreed', 'purchased']);
 
@@ -87,16 +90,25 @@ export async function resolveCategory(auth: Auth, targetWs: string, module: stri
   if (cat.workspace_id === targetWs) return cat.id;
   const same = await q1<{ id: string }>(
     `INSERT INTO categories (workspace_id, module, group_name, name, color, sort_order) VALUES ($1,$2,$3,$4,$5,$6)
-     ON CONFLICT (workspace_id, module, lower(name)) DO UPDATE SET name = categories.name RETURNING id`,
+     ON CONFLICT (workspace_id, module, lower(name)) WHERE list_id IS NULL DO UPDATE SET name = categories.name RETURNING id`,
     [targetWs, module, cat.group_name, cat.name, cat.color, cat.sort_order],
   );
   return same!.id;
 }
 
-async function assertCategory(workspaceId: string, module: string, categoryId: string | null | undefined) {
+/** A list the household made (not one belonging to the partner's private space). */
+export async function loadCustomList(a: Auth, id: string) {
+  const list = await q1<any>(`SELECT * FROM lists WHERE id = $1 AND module = 'custom' AND workspace_id = ANY($2::uuid[]) AND archived_at IS NULL`, [
+    parse(uuid, id), [a.personalWorkspaceId, a.sharedWorkspaceId],
+  ]);
+  if (!list) throw badRequest('Unknown list');
+  return list;
+}
+
+/** Sections of a custom list belong to that list only. */
+export async function assertListSection(listId: string, categoryId: string | null | undefined) {
   if (!categoryId) return;
-  const c = await q1('SELECT 1 FROM categories WHERE id = $1 AND workspace_id = $2 AND module = $3', [categoryId, workspaceId, module]);
-  if (!c) throw badRequest('Unknown category for this list');
+  if (!(await q1('SELECT 1 FROM categories WHERE id = $1 AND list_id = $2', [categoryId, listId]))) throw badRequest('Unknown section for this list');
 }
 
 export async function setTags(workspaceId: string, itemId: string, tags: string[]) {
@@ -168,13 +180,22 @@ itemRoutes.patch('/lists/:id', async (c) => {
   const list = await q1<any>('SELECT * FROM lists WHERE id = $1', [parse(uuid, c.req.param('id'))]);
   if (!list) throw notFound();
   assertWorkspace(a, list.workspace_id);
-  const b = parse(z.object({ name: z.string().trim().min(1).max(80).optional(), archived: z.boolean().optional() }), await c.req.json());
+  const b = parse(z.object({
+    name: z.string().trim().min(1).max(80).optional(), archived: z.boolean().optional(),
+    emoji: z.string().trim().min(1).max(16).optional(), color: z.string().regex(/^#[0-9a-f]{6}$/i).optional(),
+  }), await c.req.json());
   if (b.archived && list.is_default) throw badRequest('The default list cannot be archived');
-  const row = await q1(
-    `UPDATE lists SET name = COALESCE($2, name), archived_at = CASE WHEN $3::boolean IS NULL THEN archived_at WHEN $3 THEN now() ELSE NULL END
+  if ((b.name || b.emoji || b.color) && list.module !== 'custom') throw badRequest('Built-in lists keep their name');
+  const row = await q1<any>(
+    `UPDATE lists SET name = COALESCE($2, name), emoji = COALESCE($4, emoji), color = COALESCE($5, color), updated_at = now(),
+       archived_at = CASE WHEN $3::boolean IS NULL THEN archived_at WHEN $3 THEN COALESCE(archived_at, date_trunc('milliseconds', now())) ELSE NULL END
       WHERE id = $1 RETURNING *`,
-    [list.id, b.name ?? null, b.archived ?? null],
+    [list.id, b.name ?? null, b.archived ?? null, b.emoji ?? null, b.color ?? null],
   );
+  // Archiving a list archives what is in it (with the same timestamp, so restoring brings back exactly those).
+  if (b.archived === true && !list.archived_at) await q('UPDATE items SET archived_at = $2 WHERE list_id = $1 AND archived_at IS NULL', [list.id, row.archived_at]);
+  if (b.archived === false && list.archived_at) await q('UPDATE items SET archived_at = NULL WHERE list_id = $1 AND archived_at = $2', [list.id, list.archived_at]);
+  if (b.archived !== undefined) await logActivity(list.workspace_id, 'list', list.id, a.user.id, b.archived ? 'archived' : 'restored', b.archived ? `Archived the list “${list.name}”` : `Restored the list “${list.name}”`);
   return c.json({ list: row });
 });
 
@@ -200,7 +221,7 @@ itemRoutes.post('/spaces/:space/categories', async (c) => {
   );
   const row = await q1(
     `INSERT INTO categories (workspace_id, module, name, group_name, color) VALUES ($1,$2,$3,$4,COALESCE($5,'#8a8178'))
-     ON CONFLICT (workspace_id, module, lower(name)) DO UPDATE SET name = categories.name RETURNING *`,
+     ON CONFLICT (workspace_id, module, lower(name)) WHERE list_id IS NULL DO UPDATE SET name = categories.name RETURNING *`,
     [ws, b.module, b.name, b.group_name, b.color ?? null],
   );
   return c.json({ category: row }, 201);
@@ -258,7 +279,7 @@ itemRoutes.get('/spaces/:space/items', async (c) => {
   return c.json({ items: await serializeItems(a, rows) });
 });
 
-export const createItemBody = itemFields.extend({ module: MODULE, list_id: uuid.optional(), grocery_state: z.enum(['need', 'stock']).optional() });
+export const createItemBody = itemFields.extend({ module: ANY_MODULE, list_id: uuid.optional(), grocery_state: z.enum(['need', 'stock']).optional() });
 
 itemRoutes.post('/spaces/:space/items', async (c) => {
   const a = requireAuth(c);
@@ -269,12 +290,21 @@ itemRoutes.post('/spaces/:space/items', async (c) => {
 
 /** Create an item in ME or US. Categories from the other space are mapped by name. */
 export async function insertItem(a: Auth, sp: 'me' | 'us', b: z.infer<typeof createItemBody>) {
-  const ws = workspaceFor(a, sp);
-  const list = b.list_id
-    ? await q1<any>('SELECT * FROM lists WHERE id = $1 AND workspace_id = $2 AND module = $3 AND archived_at IS NULL', [b.list_id, ws, b.module])
-    : await q1<any>('SELECT * FROM lists WHERE workspace_id = $1 AND module = $2 AND is_default', [ws, b.module]);
-  if (!list) throw badRequest('Unknown list');
-  b.category_id = await resolveCategory(a, ws, b.module, b.category_id);
+  let ws = workspaceFor(a, sp);
+  let list: any;
+  if (b.module === 'custom') {
+    if (!b.list_id) throw badRequest('Choose a list');
+    list = await loadCustomList(a, b.list_id);
+    // Everything in a private list is private.
+    if (list.workspace_id === a.personalWorkspaceId) ws = a.personalWorkspaceId;
+    await assertListSection(list.id, b.category_id);
+  } else {
+    list = b.list_id
+      ? await q1<any>('SELECT * FROM lists WHERE id = $1 AND workspace_id = $2 AND module = $3 AND archived_at IS NULL', [b.list_id, ws, b.module])
+      : await q1<any>('SELECT * FROM lists WHERE workspace_id = $1 AND module = $2 AND is_default', [ws, b.module]);
+    if (!list) throw badRequest('Unknown list');
+    b.category_id = await resolveCategory(a, ws, b.module, b.category_id);
+  }
   assertMember(a, b.assigned_to);
   assertMember(a, b.intended_for_user_id);
   const state = b.grocery_state ?? 'need';
@@ -292,7 +322,7 @@ export async function insertItem(a: Auth, sp: 'me' | 'us', b: z.infer<typeof cre
   if (b.tags) await setTags(ws, row.id, b.tags);
   const withReminder = await syncItemReminder(row, a.household.timezone);
   await logActivity(ws, 'item', row.id, a.user.id, 'created', `Added “${row.title}”`);
-  if (sp === 'us') await notifyNewSharedItem(a, row);
+  if (ws === a.sharedWorkspaceId) await notifyNewSharedItem(a, row);
   return (await serializeItems(a, [withReminder]))[0];
 }
 
@@ -319,7 +349,7 @@ itemRoutes.get('/items/:id', async (c) => {
     q(`SELECT a.action, a.summary, a.created_at, a.actor_id FROM activity a WHERE a.entity_type = 'item' AND a.entity_id = $1 ORDER BY a.created_at DESC LIMIT 50`, [row.id]),
     // The private original is only described if the viewer can see it.
     row.origin_item_id ? q1('SELECT id, title, workspace_id, updated_at FROM items WHERE id = $1 AND workspace_id = $2', [row.origin_item_id, a.personalWorkspaceId]) : null,
-    q1('SELECT id, name FROM lists WHERE id = $1', [row.list_id]),
+    q1('SELECT id, name, module, emoji, color, event_id FROM lists WHERE id = $1', [row.list_id]),
     q('SELECT id, title, done, position FROM subtasks WHERE item_id = $1 ORDER BY position, created_at', [row.id]),
   ]);
   const alternatives = row.comparison_group_id
@@ -338,20 +368,37 @@ itemRoutes.get('/items/:id', async (c) => {
 itemRoutes.patch('/items/:id', async (c) => {
   const a = requireAuth(c);
   const row = await loadEntity<any>(a, 'item', c.req.param('id'));
-  const b = parse(itemFields.partial().extend({ list_id: uuid.optional(), comparison_group_id: uuid.nullish(), module: MODULE.optional() }), await c.req.json());
-  // Moving to another list (Groceries ↔ Home & Gadgets ↔ Shopping & Other) keeps the space.
+  const b = parse(itemFields.partial().extend({ list_id: uuid.optional(), comparison_group_id: uuid.nullish(), module: ANY_MODULE.optional() }), await c.req.json());
+  // Moving to another list keeps the space; the section is matched by name.
   let moduleChange: string | null = null;
-  if (b.module && b.module !== row.module) {
-    moduleChange = b.module;
-    const target = await q1<any>('SELECT id FROM lists WHERE workspace_id = $1 AND module = $2 AND is_default', [row.workspace_id, b.module]);
-    if (!target) throw badRequest('Unknown list');
+  const targetModule = b.module ?? row.module;
+  if (targetModule !== row.module || (targetModule === 'custom' && b.list_id && b.list_id !== row.list_id)) {
     const cat = row.category_id ? await q1<any>('SELECT name FROM categories WHERE id = $1', [row.category_id]) : null;
-    const same = cat ? await q1<any>('SELECT id FROM categories WHERE workspace_id = $1 AND module = $2 AND lower(name) = lower($3)', [row.workspace_id, b.module, cat.name]) : null;
-    await q('UPDATE items SET module = $2, list_id = $3, category_id = $4, comparison_group_id = NULL WHERE id = $1', [row.id, b.module, target.id, same?.id ?? null]);
-    row.module = b.module; row.list_id = target.id; row.category_id = same?.id ?? null;
+    let target: any;
+    let same: { id: string } | null = null;
+    if (targetModule === 'custom') {
+      if (!b.list_id) throw badRequest('Choose a list');
+      target = await loadCustomList(a, b.list_id);
+      if (target.workspace_id === a.personalWorkspaceId && row.workspace_id !== target.workspace_id) {
+        throw badRequest('That list is private. Lock this item first to move it there.');
+      }
+      same = cat ? await q1<any>('SELECT id FROM categories WHERE list_id = $1 AND lower(name) = lower($2)', [target.id, cat.name]) : null;
+      moduleChange = target.name;
+    } else {
+      target = await q1<any>('SELECT id FROM lists WHERE workspace_id = $1 AND module = $2 AND is_default', [row.workspace_id, targetModule]);
+      if (!target) throw badRequest('Unknown list');
+      same = cat ? await q1<any>('SELECT id FROM categories WHERE workspace_id = $1 AND module = $2 AND list_id IS NULL AND lower(name) = lower($3)', [row.workspace_id, targetModule, cat.name]) : null;
+      moduleChange = LIST_NAMES[targetModule as keyof typeof LIST_NAMES];
+    }
+    await q('UPDATE items SET module = $2, list_id = $3, category_id = $4, comparison_group_id = NULL WHERE id = $1', [row.id, targetModule, target.id, same?.id ?? null]);
+    row.module = targetModule; row.list_id = target.id; row.category_id = same?.id ?? null;
     delete b.list_id;
   }
-  if (b.category_id) b.category_id = await resolveCategory(a, row.workspace_id, row.module, b.category_id);
+  if (b.list_id === row.list_id) delete b.list_id;
+  if (b.category_id) {
+    if (row.module === 'custom') await assertListSection(row.list_id, b.category_id);
+    else b.category_id = await resolveCategory(a, row.workspace_id, row.module, b.category_id);
+  }
   if (b.due_date === null) { b.due_time = null; }
   assertMember(a, b.assigned_to);
   assertMember(a, b.intended_for_user_id);
@@ -363,7 +410,7 @@ itemRoutes.patch('/items/:id', async (c) => {
   if (row.module === 'grocery') { delete cols.decision_status; }
   const keys = Object.keys(cols);
   let updated = row;
-  if (moduleChange) await logActivity(row.workspace_id, 'item', row.id, a.user.id, 'moved', `Moved to ${moduleChange === 'grocery' ? 'Groceries' : moduleChange === 'home' ? 'Home & Gadgets' : 'Shopping & Other'}`);
+  if (moduleChange) await logActivity(row.workspace_id, 'item', row.id, a.user.id, 'moved', `Moved to ${moduleChange}`);
   if (keys.length) {
     updated = await q1(
       `UPDATE items SET ${keys.map((k, i) => `${k} = $${i + 3}`).join(', ')}, updated_at = now(), updated_by = $2 WHERE id = $1 RETURNING *`,

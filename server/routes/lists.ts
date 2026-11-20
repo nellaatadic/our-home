@@ -3,9 +3,10 @@ import { z } from 'zod';
 import { q, q1, tx } from '../db.js';
 import { requireAuth } from '../lib/auth.js';
 import { accessibleWorkspaceIds, loadEntity, type AppEnv, type Auth } from '../lib/access.js';
-import { badRequest, forbidden, notFound, parse, priority, uuid } from '../lib/http.js';
+import { badRequest, forbidden, HttpError, notFound, parse, priority, uuid } from '../lib/http.js';
+import { getStorage } from '../lib/storage.js';
 import { logActivity } from '../lib/notify.js';
-import { createItemBody, insertItem, MODULE, serializeItems } from './items.js';
+import { ANY_MODULE, createItemBody, insertItem, loadCustomList, MODULE, serializeItems } from './items.js';
 
 /**
  * The three lists (Groceries, Home & Gadgets, Shopping & Other) as one view
@@ -24,9 +25,10 @@ const SORTS: Record<string, string> = {
 
 listRoutes.get('/modules/:module/items', async (c) => {
   const a = requireAuth(c);
-  const module = parse(MODULE, c.req.param('module'));
+  const module = parse(ANY_MODULE, c.req.param('module'));
   const f = parse(
     z.object({
+      list: uuid.optional(),
       state: z.enum(['need', 'stock']).optional(),
       q: z.string().max(100).optional(),
       category: z.string().max(60).optional(),
@@ -42,6 +44,8 @@ listRoutes.get('/modules/:module/items', async (c) => {
     c.req.query(),
   );
   const wss = f.privacy === 'private' ? [a.personalWorkspaceId] : f.privacy === 'shared' ? [a.sharedWorkspaceId] : accessibleWorkspaceIds(a);
+  // A list the household made is chosen by id; the built-in ones by module.
+  const listId = module === 'custom' ? (await loadCustomList(a, f.list ?? '')).id : null;
   const rows = await q(
     `SELECT i.* FROM items i LEFT JOIN categories c ON c.id = i.category_id
       WHERE i.workspace_id = ANY($1::uuid[]) AND i.module = $2 AND i.archived_at IS NULL
@@ -54,15 +58,16 @@ listRoutes.get('/modules/:module/items', async (c) => {
         AND (NOT $8 OR i.due_date IS NOT NULL)
         AND (NOT $9 OR i.urgent)
         AND ($10::uuid IS NULL OR i.created_by = $10)
+        AND ($12::uuid IS NULL OR i.list_id = $12)
       ORDER BY ${SORTS[f.sort ?? 'category']}
       LIMIT $11`,
     [wss, module, f.state ?? null, f.q?.trim() || null, f.category ?? null, f.priority ?? null, f.flagged === 'true', f.dated === 'true',
-      f.urgent === 'true', f.added_by ?? null, f.limit ?? 500],
+      f.urgent === 'true', f.added_by ?? null, f.limit ?? 500, listId],
   );
   const counts = await q1<{ need: number; stock: number }>(
     `SELECT count(*) FILTER (WHERE grocery_state = 'need')::int AS need, count(*) FILTER (WHERE grocery_state = 'stock')::int AS stock
-       FROM items WHERE workspace_id = ANY($1::uuid[]) AND module = $2 AND archived_at IS NULL`,
-    [accessibleWorkspaceIds(a), module],
+       FROM items WHERE workspace_id = ANY($1::uuid[]) AND module = $2 AND archived_at IS NULL AND ($3::uuid IS NULL OR list_id = $3)`,
+    [accessibleWorkspaceIds(a), module, listId],
   );
   return c.json({ items: await serializeItems(a, rows), counts });
 });
@@ -70,7 +75,7 @@ listRoutes.get('/modules/:module/items', async (c) => {
 /** Add an item. Shared (US) unless `private` is true. */
 listRoutes.post('/modules/:module/items', async (c) => {
   const a = requireAuth(c);
-  const module = parse(MODULE, c.req.param('module'));
+  const module = parse(ANY_MODULE, c.req.param('module'));
   const raw = await c.req.json();
   const b = parse(createItemBody.omit({ module: true }).extend({ private: z.boolean().optional() }), raw);
   const { private: isPrivate, ...rest } = b;
@@ -97,7 +102,7 @@ listRoutes.post('/modules/:module/categories', async (c) => {
   const b = parse(z.object({ name: z.string().trim().min(1).max(60), color: z.string().regex(/^#[0-9a-f]{6}$/i).optional() }), await c.req.json());
   const row = await q1(
     `INSERT INTO categories (workspace_id, module, name, color) VALUES ($1,$2,$3,COALESCE($4,'#8a8178'))
-     ON CONFLICT (workspace_id, module, lower(name)) DO UPDATE SET name = categories.name RETURNING id, name, color, group_name, sort_order`,
+     ON CONFLICT (workspace_id, module, lower(name)) WHERE list_id IS NULL DO UPDATE SET name = categories.name RETURNING id, name, color, group_name, sort_order`,
     [a.sharedWorkspaceId, module, b.name, b.color ?? null],
   );
   return c.json({ category: row }, 201);
@@ -125,15 +130,23 @@ async function moveItem(a: Auth, row: any, target: string) {
   const from = row.workspace_id;
   const partnerId = a.partner?.id ?? null;
   return tx(async (db) => {
-    const list = (await db.query<any>('SELECT id FROM lists WHERE workspace_id = $1 AND module = $2 AND is_default', [target, row.module])).rows[0];
-    if (!list) throw badRequest('Unknown list');
+    let list: any;
     let categoryId: string | null = null;
-    if (row.category_id) {
+    if (row.module === 'custom') {
+      // A household-made list is shared by both spaces: a locked item stays in its list, only hidden from the partner.
+      list = (await db.query<any>('SELECT id, workspace_id FROM lists WHERE id = $1', [row.list_id])).rows[0];
+      if (target === a.sharedWorkspaceId && list.workspace_id === a.personalWorkspaceId) throw badRequest('This list is private, so what is in it stays private.');
+      categoryId = row.category_id;
+    } else {
+      list = (await db.query<any>('SELECT id FROM lists WHERE workspace_id = $1 AND module = $2 AND is_default', [target, row.module])).rows[0];
+    }
+    if (!list) throw badRequest('Unknown list');
+    if (row.category_id && row.module !== 'custom') {
       const cat = (await db.query<any>('SELECT * FROM categories WHERE id = $1', [row.category_id])).rows[0];
       if (cat) {
         categoryId = (await db.query<any>(
           `INSERT INTO categories (workspace_id, module, group_name, name, color, sort_order) VALUES ($1,$2,$3,$4,$5,$6)
-           ON CONFLICT (workspace_id, module, lower(name)) DO UPDATE SET name = categories.name RETURNING id`,
+           ON CONFLICT (workspace_id, module, lower(name)) WHERE list_id IS NULL DO UPDATE SET name = categories.name RETURNING id`,
           [target, row.module, cat.group_name, cat.name, cat.color, cat.sort_order],
         )).rows[0].id;
       }
@@ -205,5 +218,123 @@ listRoutes.delete('/subtasks/:id', async (c) => {
   const a = requireAuth(c);
   const s = await loadSubtask(a, c.req.param('id'));
   await q('DELETE FROM subtasks WHERE id = $1', [s.id]);
+  return c.json({ ok: true });
+});
+
+// ------------------------------------------------------------ custom lists
+const LIST_COLORS = /^#[0-9a-f]{6}$/i;
+
+/**
+ * Lists in the sidebar and on the dashboard: the three built-in ones plus the
+ * lists the household made. Lists that belong to a plan are not included.
+ */
+listRoutes.get('/lists/nav', async (c) => {
+  const a = requireAuth(c);
+  const wss = accessibleWorkspaceIds(a);
+  const [builtin, custom] = await Promise.all([
+    q<any>(`SELECT id, module FROM lists WHERE workspace_id = $1 AND is_default AND module <> 'custom'`, [a.sharedWorkspaceId]),
+    q<any>(
+      `SELECT l.id, l.name, l.emoji, l.color, l.workspace_id, l.created_by, l.created_at,
+              (SELECT count(*)::int FROM items i WHERE i.list_id = l.id AND i.archived_at IS NULL AND i.grocery_state = 'need' AND i.workspace_id = ANY($1::uuid[])) AS need
+         FROM lists l WHERE l.workspace_id = ANY($1::uuid[]) AND l.module = 'custom' AND l.event_id IS NULL AND l.archived_at IS NULL
+        ORDER BY l.position, l.created_at`,
+      [wss],
+    ),
+  ]);
+  return c.json({
+    builtin: Object.fromEntries(builtin.map((b) => [b.module, b.id])),
+    custom: custom.map(({ workspace_id, ...l }) => ({ ...l, private: workspace_id === a.personalWorkspaceId })),
+  });
+});
+
+const newListBody = z.object({
+  name: z.string().trim().min(1).max(80),
+  emoji: z.string().trim().min(1).max(16).optional(),
+  color: z.string().regex(LIST_COLORS).optional(),
+  private: z.boolean().optional(),
+  event_id: uuid.optional(),
+  sections: z.array(z.string().trim().min(1).max(60)).max(30).optional(),
+});
+
+/** Make a new list. Shared unless private; a plan's list lives where the plan lives. */
+listRoutes.post('/lists', async (c) => {
+  const a = requireAuth(c);
+  const b = parse(newListBody, await c.req.json());
+  let ws = b.private ? a.personalWorkspaceId : a.sharedWorkspaceId;
+  if (b.event_id) {
+    ws = (await loadEntity<any>(a, 'event', b.event_id)).workspace_id;
+    await q('UPDATE events SET is_plan = true WHERE id = $1 AND NOT is_plan', [b.event_id]);
+  }
+  const list = await q1<any>(
+    `INSERT INTO lists (workspace_id, module, name, emoji, color, event_id, created_by, position)
+     VALUES ($1,'custom',$2,$3,$4,$5,$6, (SELECT COALESCE(max(position), 100) + 1 FROM lists WHERE workspace_id = $1 AND module = 'custom'))
+     RETURNING *`,
+    [ws, b.name, b.emoji ?? null, b.color ?? null, b.event_id ?? null, a.user.id],
+  );
+  let i = 0;
+  for (const name of [...new Set(b.sections ?? [])]) {
+    await q(`INSERT INTO categories (workspace_id, module, list_id, name, sort_order) VALUES ($1,'custom',$2,$3,$4) ON CONFLICT DO NOTHING`, [ws, list.id, name, i++]);
+  }
+  await logActivity(ws, 'list', list.id, a.user.id, 'created', `Made the list “${list.name}”`);
+  return c.json({ list: { ...list, private: ws === a.personalWorkspaceId } }, 201);
+});
+
+/** One custom list (for its page header). */
+listRoutes.get('/lists/:id', async (c) => {
+  const a = requireAuth(c);
+  const list = await q1<any>(`SELECT * FROM lists WHERE id = $1 AND module = 'custom' AND workspace_id = ANY($2::uuid[])`, [parse(uuid, c.req.param('id')), accessibleWorkspaceIds(a)]);
+  if (!list) throw notFound();
+  const plan = list.event_id ? await q1<any>('SELECT id, title FROM events WHERE id = $1', [list.event_id]) : null;
+  return c.json({ list: { ...list, private: list.workspace_id === a.personalWorkspaceId, plan } });
+});
+
+listRoutes.get('/lists/:id/sections', async (c) => {
+  const a = requireAuth(c);
+  const list = await loadCustomList(a, c.req.param('id'));
+  const rows = await q('SELECT id, name, color, group_name, sort_order FROM categories WHERE list_id = $1 ORDER BY sort_order, lower(name)', [list.id]);
+  return c.json({ categories: rows });
+});
+
+listRoutes.post('/lists/:id/sections', async (c) => {
+  const a = requireAuth(c);
+  const list = await loadCustomList(a, c.req.param('id'));
+  const b = parse(z.object({ name: z.string().trim().min(1).max(60) }), await c.req.json());
+  const row = await q1(
+    `INSERT INTO categories (workspace_id, module, list_id, name, sort_order)
+     VALUES ($1,'custom',$2,$3,(SELECT COALESCE(max(sort_order), -1) + 1 FROM categories WHERE list_id = $2))
+     ON CONFLICT (list_id, lower(name)) WHERE list_id IS NOT NULL DO UPDATE SET name = categories.name RETURNING id, name, color, group_name, sort_order`,
+    [list.workspace_id, list.id, b.name],
+  );
+  return c.json({ category: row }, 201);
+});
+
+/**
+ * Permanently delete an archived custom list and everything in it (items,
+ * their conversations and photos). Shared lists need an explicit confirmation.
+ */
+listRoutes.delete('/lists/:id', async (c) => {
+  const a = requireAuth(c);
+  const list = await q1<any>(`SELECT * FROM lists WHERE id = $1 AND module = 'custom' AND workspace_id = ANY($2::uuid[])`, [parse(uuid, c.req.param('id')), accessibleWorkspaceIds(a)]);
+  if (!list) throw notFound();
+  if (!list.archived_at) throw badRequest('Archive this list first. Archived lists can be restored; deletion is permanent.');
+  if (list.workspace_id === a.sharedWorkspaceId && c.req.query('confirm') !== 'permanent') {
+    throw new HttpError(428, 'confirmation_required', 'Deleting a shared list deletes everything in it for both of you. Confirm to continue.');
+  }
+  const items = (await q<{ id: string }>('SELECT id FROM items WHERE list_id = $1', [list.id])).map((r) => r.id);
+  const atts = await q<{ id: string; blob_key: string }>(
+    `SELECT id, blob_key FROM attachments
+      WHERE (entity_type = 'item' AND entity_id = ANY($1::uuid[]))
+         OR (entity_type = 'message' AND entity_id IN (SELECT m.id FROM messages m JOIN threads t ON t.id = m.thread_id WHERE t.entity_type = 'item' AND t.entity_id = ANY($1::uuid[])))`,
+    [items],
+  );
+  for (const att of atts) await getStorage().delete(att.blob_key);
+  await tx(async (db) => {
+    await db.query('DELETE FROM attachments WHERE id = ANY($1::uuid[])', [atts.map((x) => x.id)]);
+    for (const t of ['threads', 'reactions', 'favorites', 'recently_viewed', 'notifications']) {
+      await db.query(`DELETE FROM ${t} WHERE entity_type = 'item' AND entity_id = ANY($1::uuid[])`, [items]);
+    }
+    await db.query('DELETE FROM lists WHERE id = $1', [list.id]);
+  });
+  await logActivity(list.workspace_id, 'list', list.id, a.user.id, 'deleted', `Permanently deleted the list “${list.name}”`);
   return c.json({ ok: true });
 });
