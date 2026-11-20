@@ -3,10 +3,12 @@ import { Link } from 'react-router-dom';
 import { api, useApi } from '../lib/api';
 import { useMe, useSession } from '../lib/session';
 import { Field, useAction, useToast } from '../components/ui';
+import { describeRule, useNick } from '../lib/nick';
+import { X } from 'lucide-react';
 
 const PREFS = [
   ['notify_mentions', 'When someone mentions me'], ['notify_replies', 'Replies in conversations I’m part of'], ['notify_shared', 'New things shared with US'],
-  ['notify_assigned', 'Tasks assigned to me and their updates'], ['notify_reminders', 'Reminders'], ['notify_calendar', 'Changes to the US calendar'], ['notify_decisions', 'Reactions and decisions'],
+  ['notify_assigned', 'Tasks assigned to me and their updates'], ['notify_reminders', 'Reminders'], ['notify_calendar', 'Changes to the US calendar'], ['notify_decisions', 'Reactions and decisions'], ['notify_activity', 'What my partner adds, ticks off or marks urgent'],
 ] as const;
 
 export function SettingsPage() {
@@ -42,6 +44,8 @@ export function SettingsPage() {
           </form>
         </details>
       </section>
+
+      <NicknameRules />
 
       <section className="card">
         <h2>Household</h2>
@@ -91,7 +95,7 @@ export function SettingsPage() {
         <h2>Connections & data</h2>
         <p><Link to="/calendar/connections">Google calendars</Link> {config.google_configured ? '' : <span className="muted small">(not configured on this server)</span>}</p>
         <p className="muted small">Receipt reading and text-to-event AI: {config.ai_configured ? 'enabled' : 'not configured — the built-in parser and manual entry are used'}.</p>
-        <p><Link to="/archive">Archive</Link></p>
+        <p><Link to="/notifications">Activity</Link> · <Link to="/archive">Archive</Link></p>
       </section>
 
       <button className="btn ghost" onClick={logout}>Sign out</button>
@@ -133,6 +137,70 @@ function ShareSetup() {
         <div className="copy-row"><code className="clamp1">{bookmarklet}</code><button className="btn small" onClick={() => copy(bookmarklet, 'Bookmark')}>Copy</button></div>
       </details>
       <p className="muted tiny">Try it: <Link to={`/share?url=${encodeURIComponent('https://example.com/')}&title=${encodeURIComponent('A page to save')}`}>open the share page with an example link</Link>.</p>
+    </section>
+  );
+}
+
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+/**
+ * “Change their name when…”: a name you see for someone on certain days,
+ * like “Big Friday” every Friday or “Birthday Boy” on 11 December. Only you see it.
+ */
+function NicknameRules() {
+  const me = useMe();
+  const { rules, reload, name } = useNick();
+  const { run, busy } = useAction();
+  const others = me.members.filter((m) => m.id !== me.user.id);
+  const [target, setTarget] = useState(others[0]?.id ?? me.user.id);
+  const [nick, setNick] = useState('');
+  const [rule, setRule] = useState<'weekly' | 'yearly' | 'once'>('weekly');
+  const [weekday, setWeekday] = useState(5);
+  const [date, setDate] = useState('');
+  const who = (id: string) => me.members.find((m) => m.id === id)?.display_name ?? 'Former member';
+  const add = () => run(async () => {
+    await api.post('/nicknames', {
+      target_id: target, name: nick.trim(), rule,
+      weekday: rule === 'weekly' ? weekday : undefined,
+      month_day: rule === 'yearly' ? date.slice(5) : undefined,
+      on_date: rule === 'once' ? date : undefined,
+    });
+    setNick('');
+    reload();
+  }, 'Saved');
+  const canAdd = nick.trim() && (rule === 'weekly' || /^\d{4}-\d{2}-\d{2}$/.test(date));
+  return (
+    <section className="card" id="nicknames">
+      <h2>Change {others.length === 1 ? `${others[0].display_name}’s` : 'a'} name when…</h2>
+      <p className="muted small">A name you see on certain days, like “Big Friday” every Friday or “Birthday Boy” on their birthday. Only you see it{others[0] ? `; ${others[0].display_name} doesn’t` : ''}.{others[0] && name(others[0].id) !== others[0].display_name ? ` Today: ${name(others[0].id)}.` : ''}</p>
+      {rules.length > 0 && (
+        <ul className="rows">
+          {rules.map((r) => (
+            <li key={r.id} className="row gap-s">
+              <span className="grow"><b>{r.name}</b> <span className="muted small">for {who(r.target_id)} · {describeRule(r)}</span></span>
+              <button className="icon-btn small" aria-label={`Remove ${r.name}`} onClick={() => run(async () => { await api.del(`/nicknames/${r.id}`); reload(); })}><X size={14} /></button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <form className="nick-form" onSubmit={(e) => { e.preventDefault(); if (canAdd) add(); }}>
+        {me.members.length > 1 && (
+          <select value={target} onChange={(e) => setTarget(e.target.value)} aria-label="Whose name">
+            {me.members.map((m) => <option key={m.id} value={m.id}>{m.id === me.user.id ? 'Me' : m.display_name}</option>)}
+          </select>
+        )}
+        <span className="muted small">becomes</span>
+        <input value={nick} onChange={(e) => setNick(e.target.value)} placeholder="Big Friday" maxLength={40} aria-label="Nickname" />
+        <select value={rule} onChange={(e) => setRule(e.target.value as any)} aria-label="When">
+          <option value="weekly">every week on</option>
+          <option value="yearly">every year on</option>
+          <option value="once">only on</option>
+        </select>
+        {rule === 'weekly'
+          ? <select value={weekday} onChange={(e) => setWeekday(Number(e.target.value))} aria-label="Day">{WEEKDAYS.map((d, i) => <option key={d} value={i}>{d}</option>)}</select>
+          : <input type="date" value={date} onChange={(e) => setDate(e.target.value)} aria-label="Date" />}
+        <button className="btn small primary" disabled={busy || !canAdd}>Add</button>
+      </form>
     </section>
   );
 }

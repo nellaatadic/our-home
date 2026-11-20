@@ -4,7 +4,7 @@ import { q, q1 } from '../db.js';
 import { requireAuth } from '../lib/auth.js';
 import { canAccessWorkspace, ENTITY_TABLES, isEntityType, loadEntity, THREAD_ENTITY_TYPES, type AppEnv, type Auth, type ThreadEntityType } from '../lib/access.js';
 import { badRequest, forbidden, HttpError, notFound, parse, uuid } from '../lib/http.js';
-import { logActivity, notify } from '../lib/notify.js';
+import { logActivity, notify, tellPartner } from '../lib/notify.js';
 import { getStorage } from '../lib/storage.js';
 import { parseRefs } from '../lib/refs.js';
 import { archivePlanParts } from './plans.js';
@@ -258,6 +258,7 @@ entityRoutes.post('/entities/:type/:id/archive', async (c) => {
   const archived = await q1<{ archived_at: Date }>(`UPDATE ${ENTITY_TABLES[type]} SET archived_at = date_trunc('milliseconds', now()) WHERE id = $1 RETURNING archived_at`, [row.id]);
   if (type === 'event' && row.is_plan && !row.archived_at) await archivePlanParts(row.id, archived!.archived_at);
   await logActivity(row.workspace_id, type, row.id, a.user.id, 'archived', 'Archived');
+  if (type === 'item' && !row.archived_at) await tellPartner(a.user, a.partner?.id, row, 'removed');
   return c.json({ ok: true });
 });
 

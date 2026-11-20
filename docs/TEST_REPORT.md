@@ -2,7 +2,7 @@
 
 Run on 2026-11-19 (after the lists / chat / dashboard redesign) with `npm test` (Vitest 5, Node 22, PostgreSQL 16 on localhost). The tests drive the real Hono API (`app.fetch`) against a real Postgres database, using two distinct user accounts per household and separate households for isolation tests. Google is replaced by an in-memory fake of the OAuth and Calendar v3 endpoints (`tests/google-mock.ts`). The fake records every request, so the tests can prove that no write calls reach a source calendar. AI is turned off (`AI_FEATURES=off`), so the built-in parsers are what gets tested.
 
-**Result: 7 test files, 62 tests, all passing** (run again on 2026-11-20 after the phone-first redesign: list chats, event pop-ups).
+**Result: 8 test files, 68 tests, all passing** (run again on 2026-11-20 after the Home audit: completed items, activity lines, card chats and styles, sub lists, @/# references, Board stickies for items, nicknames).
 
 | Area | File |
 |---|---|
@@ -12,6 +12,7 @@ Run on 2026-11-19 (after the lists / chat / dashboard redesign) with `npm test` 
 | Scenario F, groceries NEED→STOCK, comparisons, inventory, expenses; receipt parser, time zones, SSRF guard, link metadata | `tests/lists-receipts.test.ts` |
 | Redesign: Toronto/CAD defaults; shared-unless-locked (locking moves chat, photos, subtasks; only the creator can lock); NEED/STOCK on all lists; search and filters; moving lists; repeating items; dated-item reminders; general chat, card references, conversation cards, private topics; yearly birthdays and important dates; opt-in Busy blocks; dashboard widget settings; data page privacy | `tests/redesign.test.ts` |
 | Board, plans and custom lists: making, filling, archiving, restoring and deleting lists; private lists; locked items in shared lists; pins (running names, clamped positions, photos, locking, references, archive); plans (checklist, plan lists, links in and out, same-tag cards, archive prompt, archiving and restoring together); main-chat replies copied into cards (edits, deletions, unread counts, no copies into cards the replier can't open) | `tests/board-plans.test.ts` |
+| Home audit: completed items stay until seen and can be undone (partner's line withdrawn); folded “added” lines; urgent / removed lines, never for private items; Important Dates / To do card chats, emoji and colour; built-in list styles; sub lists for events (yearly dates); @ cards vs # items; Board stickies for items (once per item, private follows the item, commit an idea to a list); nicknames visible only to their maker | `tests/home-audit.test.ts` |
 | UI interaction (jsdom + Testing Library): the Share with US dialog | `tests/ui/share-dialog.test.tsx` |
 
 ## Detailed results

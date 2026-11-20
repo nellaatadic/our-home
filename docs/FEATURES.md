@@ -37,20 +37,25 @@
 |---|---|
 | Comment button next to every item: quick chat on the spot, with photos, files and links | ✅ |
 | Chat page: every conversation as a small card (title only), expandable inline; one ongoing chat between you two on the right | ✅ tested |
-| Type @ to mention your partner or link any shared card (item, list, event, plan, to-do, topic, pin); links open the card | ✅ tested |
+| Type @ to mention your partner or link a whole card (list, event, plan, topic, sticky); type # to link one thing in a card (an item or to-do); links open the card | ✅ tested |
 | Reply to a message in Our chat that tags a card, and the message and its replies are copied into that card's chat (marked “Our chat”; edits and deletions follow; not counted as unread twice) | ✅ tested |
 | “Linked” strip above each card's chat: what it links to, where it was mentioned, and everything sharing its tags | ✅ tested |
 | Topics: conversations not tied to an item (can be private) | ✅ tested |
-| Replies, edit and delete your own messages, read / unread, unread badge | ✅ |
-| Notifications: mentions, replies, assignments, reminders, calendar changes, reactions; per-type preferences | ✅ |
+| Messenger-style: your messages on the right without a name, theirs on the left with it; hold a message to reply, copy, edit or delete it; swipe it right to reply; read / unread, unread badge | ✅ checked in the browser |
+| While typing on a phone, the top and bottom bars step aside so the chat and keyboard have the screen | ⚠️ checked in a phone-sized browser, not on a real phone |
+| Notifications: mentions, replies, assignments, reminders, calendar changes, reactions, and one-line activity (“Zsolt marked Dish soap as urgent in @Groceries”; several additions folded into one line); per-type preferences | ✅ tested |
+| Bell pop-up shows only what is new; opening and closing it clears them; “View full activity” appears when there is something | ✅ checked in the browser |
+| Activity page: one compact line per thing (words left, time right); tap the words to go to the card on Home (and the # item in it), or “OK” to just note it | ✅ checked in the browser |
 | Email / push notifications | ⚠️ not built (in-app only) |
 
 ## Board
 | Feature | Status |
 |---|---|
-| A wall that scrolls down: sticky notes (7 colours), big words, photos and links (with a preview); drag to move, pull the corner to resize, double-click to rename | ✅ tested (API), checked in the browser |
+| A wall you can pan and zoom (pinch, trackpad, or the + / − buttons; the last view is remembered); stickies in 7 colours, photos and links; drag to move, pull the corner to resize | ✅ tested (API), checked in the browser |
+| Zoomed out, stickies turn into small bubbles (#lamp); tap one to zoom back to it | ✅ checked in the browser |
+| “+” suggests items not on the Board yet (#lamp #raincoat…); their stickies show the item's details (list, photo, notes, date, tags, chat). Stickies without an item are ideas (dashed) and can be added to a list later | ✅ tested |
 | Pins are named “New sticky 1, 2…” unless you name them, can be @-mentioned in chat, have their own chat, and can be locked or archived | ✅ tested |
-| The main chat sits beside the wall; on a phone the pins stack in one column | ✅ checked in the browser |
+| The main chat sits beside the wall on a computer; on a phone it opens full screen from the chat button | ✅ checked in the browser |
 
 ## Plans
 | Feature | Status |
@@ -70,9 +75,13 @@
 ## Home
 | Feature | Status |
 |---|---|
-| Greeting and date (tap the date for the calendar); every list as a card with a two-item preview, “+ N more” opens the whole list in place, last update time; Important Dates and To do & Reminders cards; dashed card to make a new list | ✅ checked in the browser |
-| Each list has one chat (“@groceries”) that slides in beside the cards; grocery items have no chat of their own, other lists' items keep theirs | ✅ tested |
-| Swipe an item right for Flag and Urgent, left for Details and Remove (with Undo) | ✅ checked in the browser |
+| Greeting by the time on your phone; the date is a button to the calendar; every list as a card with a two-item preview; tap the card (or “+ N more”) to open it in place, tap its name or emoji for its page; last update time; dashed card to make a new list | ✅ checked in the browser |
+| Important Dates and To do & Reminders cards: add new, their own chat, their own emoji and colour (palette button when open; also for lists) | ✅ tested |
+| Completed: ticked items stay crossed off under “Completed” for a while; tap to undo. They go once the partner has seen the “completed” line (or after 15 minutes for the one who ticked it) | ✅ tested |
+| The same item twice on a list (e.g. a second Milk) gets a ⋯ mark: probably for an event or someone, not the fridge | ✅ checked in the browser |
+| Change your partner's name on certain days (“Big Friday” every Friday, “Birthday Boy” on 11 December), set in Settings; only you see it | ✅ tested |
+| Each card has one chat (“@groceries”) that fills the right half; the greeting, headings and bottom bar make room while it is open; grocery items have no chat of their own, other lists' items keep theirs (with a short summary of the item above it) | ✅ tested |
+| Swipe an item right for Details and Urgent, left for “# Sub list” (put it on an event's own list, or say who it is for) and Remove (with Undo); hold it to see both sides; tap its name to fix a typo | ✅ checked in the browser |
 
 ## Dashboard (earlier layout)
 | Feature | Status |

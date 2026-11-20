@@ -220,7 +220,7 @@ householdRoutes.patch('/settings', async (c) => {
     z.object({
       notify_mentions: z.boolean().optional(), notify_replies: z.boolean().optional(), notify_shared: z.boolean().optional(),
       notify_assigned: z.boolean().optional(), notify_reminders: z.boolean().optional(), notify_calendar: z.boolean().optional(),
-      notify_decisions: z.boolean().optional(), dashboard_sections: z.array(z.enum(SECTIONS)).max(10).optional(),
+      notify_decisions: z.boolean().optional(), notify_activity: z.boolean().optional(), dashboard_sections: z.array(z.enum(SECTIONS)).max(10).optional(),
       share_availability: z.boolean().optional(),
       dashboard: z.object({
         widgets: z.record(z.string().regex(/^(grocery|home|idea|[0-9a-f-]{36})$/), z.object({

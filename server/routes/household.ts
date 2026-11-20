@@ -194,7 +194,12 @@ householdModuleRoutes.get('/notifications', async (c) => {
   await dispatchDueReminders(a.household.id);
   const f = parse(z.object({ unread: z.enum(['true']).optional() }), c.req.query());
   const rows = await q(
-    `SELECT n.*, u.display_name AS actor_name FROM notifications n LEFT JOIN users u ON u.id = n.actor_id
+    `SELECT n.*, u.display_name AS actor_name,
+            -- Where an item lives, so tapping the line can open its card on Home.
+            (SELECT CASE WHEN l.module = 'custom' THEN l.id::text ELSE l.module END FROM items i JOIN lists l ON l.id = i.list_id
+              WHERE n.entity_type = 'item' AND i.id = n.entity_id) AS list_key,
+            (SELECT l.event_id FROM items i JOIN lists l ON l.id = i.list_id WHERE n.entity_type = 'item' AND i.id = n.entity_id) AS list_event_id
+       FROM notifications n LEFT JOIN users u ON u.id = n.actor_id
       WHERE n.user_id = $1 AND ($2::boolean IS NOT TRUE OR n.read_at IS NULL)
         AND (n.workspace_id IS NULL OR n.workspace_id = ANY($3::uuid[]))
       ORDER BY n.created_at DESC LIMIT 100`,

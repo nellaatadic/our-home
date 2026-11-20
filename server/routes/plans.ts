@@ -19,8 +19,16 @@ import { serializeEvents } from './events.js';
 export const planRoutes = new Hono<AppEnv>();
 
 /** A plan is over the day after it ends. */
-function isOver(e: { start_date: string; end_date: string | null }, today: string) {
+/** Yearly events (birthdays) come round again, so they are never over; they show their next date. */
+function isOver(e: { start_date: string; end_date: string | null; yearly?: boolean }, today: string) {
+  if (e.yearly) return false;
   return String(e.end_date ?? e.start_date).slice(0, 10) < today;
+}
+
+function nextYearly(date: string, today: string) {
+  const md = date.slice(5, 10);
+  const y = Number(today.slice(0, 4));
+  return `${md >= today.slice(5, 10) ? y : y + 1}-${md === '02-29' ? '02-28' : md}`;
 }
 
 async function progress(a: Auth, ids: string[]) {
@@ -37,7 +45,7 @@ async function progress(a: Auth, ids: string[]) {
 export async function activePlans(a: Auth) {
   const today = todayIn(a.household.timezone);
   const rows = await q<any>(
-    `SELECT id, title, start_date::text AS start_date, end_date::text AS end_date, workspace_id, archive_prompt_dismissed_at FROM events
+    `SELECT id, title, start_date::text AS start_date, end_date::text AS end_date, workspace_id, archive_prompt_dismissed_at, yearly FROM events
       WHERE workspace_id = ANY($1::uuid[]) AND is_plan AND archived_at IS NULL ORDER BY start_date LIMIT 50`,
     [accessibleWorkspaceIds(a)],
   );
@@ -45,7 +53,7 @@ export async function activePlans(a: Auth) {
   return rows.map((r) => {
     const over = isOver(r, today);
     return {
-      id: r.id, title: r.title, start_date: r.start_date, end_date: r.end_date, space: spaceOf(a, r.workspace_id),
+      id: r.id, title: r.title, start_date: r.yearly ? nextYearly(r.start_date, today) : r.start_date, end_date: r.yearly ? null : r.end_date, space: spaceOf(a, r.workspace_id),
       checklist: prog.get(r.id) ?? { total: 0, done: 0 }, over, ask_to_archive: over && !r.archive_prompt_dismissed_at,
     };
   });
@@ -186,3 +194,34 @@ planRoutes.get('/links/:type/:id', async (c) => {
   });
 });
 
+
+/**
+ * Where an item can go when it is not for home: an upcoming event (and the
+ * lists it already has). Used by "# Sub list" on an item.
+ */
+planRoutes.get('/sublists', async (c) => {
+  const a = requireAuth(c);
+  const today = todayIn(a.household.timezone);
+  const wss = accessibleWorkspaceIds(a);
+  const events = await q<any>(
+    `SELECT e.id, e.title, e.workspace_id, e.is_plan, nx.d::text AS start_date
+       FROM events e,
+            LATERAL (SELECT CASE WHEN NOT e.yearly OR e.start_date >= $2::date THEN e.start_date
+                                 WHEN (e.start_date + make_interval(years => extract(year FROM age($2::date, e.start_date))::int))::date >= $2::date
+                                   THEN (e.start_date + make_interval(years => extract(year FROM age($2::date, e.start_date))::int))::date
+                                 ELSE (e.start_date + make_interval(years => extract(year FROM age($2::date, e.start_date))::int + 1))::date END AS d) nx
+      WHERE e.workspace_id = ANY($1::uuid[]) AND e.archived_at IS NULL AND (e.yearly OR COALESCE(e.end_date, e.start_date) >= $2::date)
+      ORDER BY e.is_plan DESC, nx.d LIMIT 25`,
+    [wss, today],
+  );
+  const lists = await q<any>(
+    'SELECT id, name, event_id, workspace_id FROM lists WHERE event_id = ANY($1::uuid[]) AND archived_at IS NULL ORDER BY created_at',
+    [events.map((e) => e.id)],
+  );
+  return c.json({
+    events: events.map((e) => ({
+      id: e.id, title: e.title, date: e.start_date, is_plan: e.is_plan, space: spaceOf(a, e.workspace_id),
+      lists: lists.filter((l) => l.event_id === e.id).map((l) => ({ id: l.id, name: l.name, space: spaceOf(a, l.workspace_id) })),
+    })),
+  });
+});
