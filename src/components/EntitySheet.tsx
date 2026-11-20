@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { Archive, ArchiveRestore, CalendarPlus, ExternalLink, ImagePlus, Pencil, Share2, Star, Trash2, Undo2 } from 'lucide-react';
+import { Linked } from './Linked';
+import { Archive, ArchiveRestore, CalendarPlus, ChevronRight, ClipboardList, ExternalLink, ImagePlus, Pencil, Share2, Star, Trash2, Undo2 } from 'lucide-react';
 import { api, emitChange, useApi } from '../lib/api';
 import { useMe } from '../lib/session';
 import { day, eventTime, money, qty, relative } from '../lib/format';
@@ -12,6 +13,7 @@ import { ExportDialog } from './ExportDialog';
 import { Confirm, ErrorNote, Loading, PriorityDot, Segmented, Sheet, SpaceTag, useAction, useToast } from './ui';
 import type { OpenType } from './Layout';
 import { ItemSheet } from './ItemSheet';
+import { EventSheet } from './EventSheet';
 
 const REACTIONS = [['love', '❤️', 'Love it'], ['yes', '👍', 'In favour'], ['unsure', '🤔', 'Unsure'], ['no', '👎', 'Not keen']] as const;
 
@@ -34,7 +36,7 @@ export function Reactions({ type, entity, onChange }: { type: string; entity: an
   );
 }
 
-function CommonActions({ type, entity, onDone, reload, extra }: { type: OpenType; entity: any; onDone: () => void; reload: () => void; extra?: ReactNode }) {
+export function CommonActions({ type, entity, onDone, reload, extra }: { type: OpenType; entity: any; onDone: () => void; reload: () => void; extra?: ReactNode }) {
   const me = useMe();
   const { run } = useAction();
   const [share, setShare] = useState(false);
@@ -187,66 +189,13 @@ function TaskDetail({ id, onClose }: { id: string; onClose: () => void }) {
           <CommonActions type="task" entity={t} onDone={onClose} reload={reload} />
         </div>
       ))}
-      {tab === 'discussion' && <Thread type="task" id={t.id} space={t.space} />}
+      {tab === 'discussion' && <><Linked type="task" id={t.id} compact /><Thread type="task" id={t.id} space={t.space} /></>}
       {tab === 'history' && <History type="task" id={t.id} />}
     </Sheet>
   );
 }
 
 // ------------------------------------------------------------------ event
-function EventDetail({ id, onClose }: { id: string; onClose: () => void }) {
-  const me = useMe();
-  const { data, error, reload } = useApi<{ event: any }>(`/events/${id}`);
-  const [tab, setTab] = useState<'details' | 'discussion' | 'history'>('details');
-  const [editing, setEditing] = useState(false);
-  const [exporting, setExporting] = useState(false);
-  const [followUp, setFollowUp] = useState('');
-  const { run } = useAction();
-  if (error) return <Sheet title="Not available" onClose={onClose}><ErrorNote error={error} /></Sheet>;
-  if (!data) return <Sheet title="Loading…" onClose={onClose}><Loading /></Sheet>;
-  const e = data.event;
-  const after = () => { reload(); emitChange(); };
-  return (
-    <Sheet wide onClose={onClose} title={<span className="row gap-s"><SpaceTag space={e.space} /> {e.title}</span>}>
-      <Provenance e={e} />
-      <Tabs tab={tab} setTab={setTab} unread={e.thread.unread} total={e.thread.total} />
-      {tab === 'details' && (editing ? <EventForm event={e} space={e.space} onCancel={() => setEditing(false)} onSaved={() => { setEditing(false); after(); }} /> : (
-        <div className="stack">
-          <div className="kvs">
-            <Row label="When">{`${day(e.start_date, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}${e.end_date && e.end_date !== e.start_date ? ` → ${day(e.end_date)}` : ''} · ${eventTime(e)}`}</Row>
-            <Row label="Where">{e.location}</Row>
-            <Row label="With">{e.participants?.length ? e.participants.join(', ') : ''}</Row>
-            <Row label="About">{e.for_user_name}</Row>
-            <Row label="Category">{e.category}</Row>
-            <Row label="Source">{e.source_type === 'google'
-              ? `${e.imported_by_name}’s Google Calendar “${e.google_calendar_name}” · imported ${relative(e.imported_at)}${e.locally_modified ? ' · edited in OUR HOME' : ''}`
-              : e.source_type === 'text' ? 'Created from text' : e.source_type === 'task' ? 'Created from a task' : `Added by ${e.created_by_name ?? ''}`}</Row>
-            <Row label="In my Google">{e.my_exports?.length > 0 && e.my_exports.map((x: any, i: number) => <div key={i}>{x.calendar_name ?? x.google_calendar_id} · {relative(x.exported_at)} {x.html_link && <a href={x.html_link} target="_blank" rel="noreferrer">open</a>}</div>)}</Row>
-          </div>
-          {e.availability_only && <p className="note subtle">Availability only — the details of this private event were not shared.</p>}
-          {e.description && <p className="prose pre">{e.description}</p>}
-          {e.space === 'us' && <Reactions type="event" entity={e} onChange={reload} />}
-          {e.follow_up_tasks?.length > 0 && (
-            <div><h3>Follow-up tasks</h3><ul className="history">{e.follow_up_tasks.map((t: any) => <li key={t.id}><Link to={`?open=task:${t.id}`}>{t.title}</Link> <span className="muted">· {t.status}</span></li>)}</ul></div>
-          )}
-          <form className="row gap-s" onSubmit={(ev) => { ev.preventDefault(); run(async () => { await api.post(`/events/${e.id}/follow-up`, { title: followUp }); setFollowUp(''); after(); }, 'Follow-up task created'); }}>
-            <input className="grow" value={followUp} onChange={(ev) => setFollowUp(ev.target.value)} placeholder="Add a follow-up task…" aria-label="Follow-up task" maxLength={200} />
-            <button className="btn small" disabled={!followUp.trim()}>Add</button>
-          </form>
-          <div className="row gap-s wrap">
-            <button className="btn small" onClick={() => setEditing(true)}><Pencil size={14} /> Edit</button>
-            <button className="btn small" onClick={() => setExporting(true)}><CalendarPlus size={14} /> Add to my Google Calendar</button>
-          </div>
-          <CommonActions type="event" entity={e} onDone={onClose} reload={reload} />
-          {exporting && <ExportDialog eventId={e.id} onClose={() => { setExporting(false); reload(); }} />}
-          {e.source_type === 'google' && <p className="muted small">Deleting or editing this copy never changes the original Google Calendar event.</p>}
-        </div>
-      ))}
-      {tab === 'discussion' && <Thread type="event" id={e.id} space={e.space} />}
-      {tab === 'history' && <History type="event" id={e.id} />}
-    </Sheet>
-  );
-}
 
 // -------------------------------------------------------------- inventory
 function InventoryDetail({ id, onClose }: { id: string; onClose: () => void }) {
@@ -287,7 +236,7 @@ function InventoryDetail({ id, onClose }: { id: string; onClose: () => void }) {
 export function EntitySheet({ type, id, onClose, chat }: { type: OpenType; id: string; onClose: () => void; chat?: boolean }) {
   if (type === 'item') return <ItemSheet id={id} onClose={onClose} startInChat={chat} />;
   if (type === 'task') return <TaskDetail id={id} onClose={onClose} />;
-  if (type === 'event') return <EventDetail id={id} onClose={onClose} />;
+  if (type === 'event') return <EventSheet id={id} onClose={onClose} startInChat={chat} />;
   if (type === 'inventory') return <InventoryDetail id={id} onClose={onClose} />;
   return <Sheet title="Expense" onClose={onClose}><p className="muted">Open expenses from the Expenses tab.</p></Sheet>;
 }

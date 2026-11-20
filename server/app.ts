@@ -8,6 +8,8 @@ import { listRoutes } from './routes/lists.js';
 import { chatRoutes } from './routes/chat.js';
 import { homeRoutes } from './routes/home.js';
 import { dataRoutes } from './routes/data.js';
+import { boardRoutes } from './routes/board.js';
+import { planRoutes } from './routes/plans.js';
 import { itemRoutes } from './routes/items.js';
 import { shareRoutes } from './routes/share.js';
 import { entityRoutes, threadRoutes } from './routes/threads.js';
@@ -41,7 +43,7 @@ export function createApp() {
 
   app.route('/auth', authRoutes);
   app.route('/household', householdRoutes);
-  for (const r of [itemRoutes, listRoutes, chatRoutes, homeRoutes, dataRoutes, shareRoutes, threadRoutes, entityRoutes, attachmentRoutes, taskRoutes, eventRoutes, googleRoutes, receiptRoutes, householdModuleRoutes]) {
+  for (const r of [itemRoutes, listRoutes, chatRoutes, homeRoutes, dataRoutes, boardRoutes, planRoutes, shareRoutes, threadRoutes, entityRoutes, attachmentRoutes, taskRoutes, eventRoutes, googleRoutes, receiptRoutes, householdModuleRoutes]) {
     app.route('/', r);
   }
 

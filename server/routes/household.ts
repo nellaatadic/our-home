@@ -281,9 +281,16 @@ householdModuleRoutes.get('/archive', async (c) => {
   const a = requireAuth(c);
   const wss = accessibleWorkspaceIds(a);
   const rows = await q(
-    `SELECT 'item' AS type, id, workspace_id, title, archived_at, module AS detail FROM items WHERE workspace_id = ANY($1::uuid[]) AND archived_at IS NOT NULL
+    `SELECT 'item' AS type, i.id, i.workspace_id, i.title, i.archived_at, i.module AS detail FROM items i WHERE i.workspace_id = ANY($1::uuid[]) AND i.archived_at IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM lists l WHERE l.id = i.list_id AND l.archived_at IS NOT NULL)
+     UNION ALL SELECT 'list', id, workspace_id, name, archived_at, CASE WHEN event_id IS NULL THEN 'list' ELSE 'plan list' END FROM lists
+        WHERE workspace_id = ANY($1::uuid[]) AND module = 'custom' AND archived_at IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM events e WHERE e.id = lists.event_id AND e.archived_at IS NOT NULL)
+     UNION ALL SELECT 'pin', id, workspace_id, title, archived_at, kind FROM pins WHERE workspace_id = ANY($1::uuid[]) AND archived_at IS NOT NULL
+     UNION ALL SELECT 'topic', id, workspace_id, title, archived_at, 'topic' FROM topics WHERE workspace_id = ANY($1::uuid[]) AND archived_at IS NOT NULL
      UNION ALL SELECT 'task', id, workspace_id, title, COALESCE(archived_at, updated_at), status FROM tasks WHERE workspace_id = ANY($1::uuid[]) AND (archived_at IS NOT NULL OR status = 'archived')
-     UNION ALL SELECT 'event', id, workspace_id, title, archived_at, start_date::text FROM events WHERE workspace_id = ANY($1::uuid[]) AND archived_at IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM events e WHERE e.id = tasks.related_event_id AND e.is_plan AND e.archived_at IS NOT NULL AND e.archived_at = tasks.archived_at)
+     UNION ALL SELECT CASE WHEN is_plan THEN 'plan' ELSE 'event' END, id, workspace_id, title, archived_at, start_date::text FROM events WHERE workspace_id = ANY($1::uuid[]) AND archived_at IS NOT NULL
      UNION ALL SELECT 'inventory', id, workspace_id, name, archived_at, room FROM inventory_items WHERE workspace_id = ANY($1::uuid[]) AND archived_at IS NOT NULL
      UNION ALL SELECT 'expense', id, workspace_id, title, archived_at, purchase_date::text FROM expenses WHERE workspace_id = ANY($1::uuid[]) AND archived_at IS NOT NULL
      ORDER BY archived_at DESC LIMIT 300`,

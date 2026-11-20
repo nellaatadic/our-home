@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Plus, RefreshCw, Settings2, Sparkles, Download } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, ListChecks, Lock, MapPin, MessageCircle, MoreHorizontal, Plus, RefreshCw, Settings2, Sparkles, Download, Users } from 'lucide-react';
 import { api, emitChange, useApi } from '../lib/api';
 import { useMe, useSession } from '../lib/session';
 import { addDays, day, eventTime, time12, todayLocal } from '../lib/format';
@@ -28,7 +28,8 @@ export function CalendarPage() {
   const open = useOpen();
   const today = todayLocal(me.household.timezone);
   const [anchor, setAnchor] = useState(today);
-  const [view, setView] = useState<'day' | 'week' | 'month'>(() => (window.innerWidth < 700 ? 'day' : 'week'));
+  const [view, setView] = useState<'cards' | 'day' | 'week' | 'month'>('cards');
+  const [menu, setMenu] = useState(false);
   const [scope, setScope] = useState<'all' | 'us' | 'me'>('all');
   const [adding, setAdding] = useState<{ date: string; start_time?: string } | null>(null);
   const [pasting, setPasting] = useState(false);
@@ -36,8 +37,9 @@ export function CalendarPage() {
   const [refreshing, setRefreshing] = useState(false);
   const grid = useMemo(() => monthGrid(anchor.slice(0, 8) + '01'), [anchor]);
   const week = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart(anchor), i)), [anchor]);
-  const from = view === 'month' ? grid[0] : view === 'week' ? week[0] : anchor;
-  const to = view === 'month' ? grid[41] : view === 'week' ? week[6] : anchor;
+  const from = view === 'month' ? grid[0] : view === 'week' || view === 'cards' ? week[0] : anchor;
+  const to = view === 'month' ? grid[41] : view === 'week' ? week[6] : view === 'cards' ? addDays(week[0], 41) : anchor;
+  const { data: plansData } = useApi<{ plans: any[] }>(view === 'cards' ? '/plans' : null);
   const { data } = useApi<{ events: any[]; busy: any[] }>(`/events?from=${from}&to=${to}&space=${scope}&busy=${scope === 'all' ? 'true' : 'false'}`);
   const { data: gstatus } = useApi<any>('/google/status');
   const byDay = useMemo(() => {
@@ -51,35 +53,37 @@ export function CalendarPage() {
   }, [data]);
   const shift = (n: number) => {
     if (view === 'day') return setAnchor(addDays(anchor, n));
-    if (view === 'week') return setAnchor(addDays(anchor, 7 * n));
+    if (view === 'week' || view === 'cards') return setAnchor(addDays(anchor, 7 * n));
     const [y, m] = anchor.split('-').map(Number);
     setAnchor(new Date(Date.UTC(y, m - 1 + n, 1)).toISOString().slice(0, 10));
   };
-  const title = view === 'day' ? day(anchor, { weekday: 'long', month: 'long', day: 'numeric' })
+  const title = view === 'cards' ? day(week[0], { month: 'long', year: 'numeric' }) : view === 'day' ? day(anchor, { weekday: 'long', month: 'long', day: 'numeric' })
     : view === 'week' ? `${day(week[0], { month: 'short', day: 'numeric' })} – ${day(week[6], { month: 'short', day: 'numeric', year: 'numeric' })}`
     : day(anchor, { month: 'long', year: 'numeric' });
   const hasConnections = (gstatus?.connections?.length ?? 0) > 0;
 
   return (
     <div className="page calendar-page">
-      <header className="page-head compact">
+      <header className="page-head compact cal-head">
         <h1>Calendar</h1>
-        <div className="row gap-s wrap">
-          <button className="btn small" onClick={() => setPasting(true)}><Sparkles size={14} /> Add from text</button>
-          <button className="btn small primary" onClick={() => setAdding({ date: anchor })}><Plus size={14} /> Event</button>
+        <div className="row gap-s">
+          <button className="icon-btn" onClick={() => setAdding({ date: anchor })} aria-label="New event"><Plus size={20} /></button>
+          <div className="menu-wrap">
+            <button className="icon-btn" onClick={() => setMenu((x) => !x)} aria-label="More" aria-expanded={menu}><MoreHorizontal size={20} /></button>
+            {menu && (
+              <div className="pop-menu" role="menu" onMouseLeave={() => setMenu(false)}>
+                <button role="menuitem" onClick={() => { setMenu(false); setPasting(true); }}><Sparkles size={14} /> Add from text</button>
+                {config.google_configured && hasConnections && <button role="menuitem" onClick={() => { setMenu(false); setImporting(true); }}><Download size={14} /> Import from Google</button>}
+                {config.google_configured && hasConnections && <button role="menuitem" onClick={() => { setMenu(false); setRefreshing(true); }}><RefreshCw size={14} /> Check Google for changes</button>}
+                <Link role="menuitem" className="pop-link" to="/calendar/connections"><Settings2 size={14} /> Google Calendar{config.google_configured ? '' : ' (not set up)'}</Link>
+              </div>
+            )}
+          </div>
         </div>
       </header>
-      <div className="toolbar">
-        <Segmented label="View" value={view} onChange={setView} options={[{ value: 'day', label: 'Day' }, { value: 'week', label: 'Week' }, { value: 'month', label: 'Month' }]} />
-        <Segmented label="Show" value={scope} onChange={setScope} options={[{ value: 'all', label: 'Everything' }, { value: 'us', label: 'Shared' }, { value: 'me', label: 'Mine' }]} />
-        <span className="grow" />
-        {config.google_configured ? (
-          <>
-            {hasConnections && <button className="btn small ghost" onClick={() => setImporting(true)}><Download size={14} /> Import</button>}
-            {hasConnections && <button className="btn small ghost" onClick={() => setRefreshing(true)}><RefreshCw size={14} /> Check for changes</button>}
-            <Link className="btn small ghost" to="/calendar/connections"><Settings2 size={14} /> Google</Link>
-          </>
-        ) : <Link className="small muted" to="/calendar/connections">Google Calendar: not set up</Link>}
+      <div className="toolbar cal-toolbar">
+        <Segmented label="View" value={view} onChange={setView} options={[{ value: 'cards', label: 'Cards' }, { value: 'day', label: 'Day' }, { value: 'week', label: 'Week' }, { value: 'month', label: 'Month' }]} />
+        <Segmented label="Show" value={scope} onChange={setScope} options={[{ value: 'all', label: 'All' }, { value: 'us', label: 'Shared' }, { value: 'me', label: 'Mine' }]} />
       </div>
       <div className="month-head">
         <button className="icon-btn" onClick={() => shift(-1)} aria-label="Previous"><ChevronLeft size={18} /></button>
@@ -87,9 +91,10 @@ export function CalendarPage() {
         <button className="icon-btn" onClick={() => shift(1)} aria-label="Next"><ChevronRight size={18} /></button>
         <button className="btn small ghost" onClick={() => setAnchor(today)}>Today</button>
         <span className="grow" />
-        <span className="legend"><i className="ev-us" /> Shared <i className="ev-me" /> Private {scope === 'all' && <><i className="busy" /> {me.partner?.display_name ?? 'Partner'} busy</>}</span>
+        {view !== 'cards' && <span className="legend"><i className="ev-us" /> Shared <i className="ev-me" /> Private {scope === 'all' && <><i className="busy" /> {me.partner?.display_name ?? 'Partner'} busy</>}</span>}
       </div>
-      {view !== 'month' && (
+      {view === 'cards' && <CardsView week={week} anchor={anchor} setAnchor={setAnchor} today={today} byDay={byDay} plans={plansData?.plans ?? []} onAdd={(d) => setAdding({ date: d })} />}
+      {(view === 'day' || view === 'week') && (
         <TimeGrid days={view === 'day' ? [anchor] : week} events={data?.events ?? []} busy={data?.busy ?? []} lanes={view === 'day' && Boolean(me.partner)}
           hourHeight={view === 'day' ? 52 : 44} onAdd={(date, start_time) => setAdding({ date, start_time })} />
       )}
@@ -336,5 +341,68 @@ function RefreshDialog({ onClose }: { onClose: () => void }) {
         </div>
       )}
     </Sheet>
+  );
+}
+
+/**
+ * The calendar's main view: a strip of the week's days and, below it, the
+ * chosen day's events and what is coming up, as cards. A card opens the
+ * event's pop-up (details, people, checklist, lists, chat).
+ */
+function CardsView({ week, anchor, setAnchor, today, byDay, plans, onAdd }: {
+  week: string[]; anchor: string; setAnchor: (d: string) => void; today: string; byDay: Map<string, any[]>; plans: any[]; onAdd: (d: string) => void;
+}) {
+  const planMap = new Map(plans.map((p) => [p.id, p]));
+  const dayEvents = byDay.get(anchor) ?? [];
+  const upcoming: { date: string; events: any[] }[] = [];
+  const seen = new Set(dayEvents.map((e) => e.id));
+  for (let i = 1, d = addDays(anchor, 1); i <= 28 && upcoming.length < 8; i++, d = addDays(d, 1)) {
+    const evs = (byDay.get(d) ?? []).filter((e) => e.start_date === d || !seen.has(e.id));
+    evs.forEach((e) => seen.add(e.id));
+    if (evs.length) upcoming.push({ date: d, events: evs });
+  }
+  return (
+    <div className="cards-view">
+      <div className="week-strip" role="tablist" aria-label="Days">
+        {week.map((d) => {
+          const n = (byDay.get(d) ?? []).length;
+          return (
+            <button key={d} role="tab" aria-selected={d === anchor} className={`ws-day ${d === anchor ? 'on' : ''} ${d === today ? 'today' : ''}`} onClick={() => setAnchor(d)}>
+              <small>{day(d, { weekday: 'narrow' })}</small><b>{Number(d.slice(8))}</b><i className={n ? 'has' : ''} aria-label={n ? `${n} events` : undefined} />
+            </button>
+          );
+        })}
+      </div>
+      <h2 className="sec">{anchor === today ? 'Today' : day(anchor, { weekday: 'long', month: 'short', day: 'numeric' })}</h2>
+      {dayEvents.length ? dayEvents.map((e) => <EventCard key={e.id + anchor} e={e} plan={planMap.get(e.id)} />) : (
+        <button className="add-card slim" onClick={() => onAdd(anchor)}><Plus size={15} /> Nothing planned. Add an event</button>
+      )}
+      {upcoming.length > 0 && <h2 className="sec">Coming up</h2>}
+      {upcoming.map((g) => (
+        <div key={g.date} className="up-group">
+          <p className="up-date">{day(g.date, { weekday: 'short', month: 'short', day: 'numeric' })}</p>
+          {g.events.map((e) => <EventCard key={e.id + g.date} e={e} plan={planMap.get(e.id)} />)}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function EventCard({ e, plan }: { e: any; plan?: any }) {
+  const open = useOpen();
+  const color = e.availability_only ? 'var(--normal)' : e.space === 'me' ? 'var(--me)' : 'var(--us)';
+  return (
+    <button className={`card-x event-card ${e.availability_only ? 'busy' : ''}`} style={{ ['--list' as any]: color }} onClick={() => !e.availability_only && open('event', e.id)} disabled={e.availability_only}>
+      <span className="bar" aria-hidden />
+      <span className="ec-title">{e.availability_only ? 'Busy' : e.title}{e.space === 'me' && !e.availability_only && <Lock size={12} className="muted" aria-label="Private" />}</span>
+      <span className="ec-meta">
+        <span>{eventTime(e)}</span>
+        {e.location && <span><MapPin size={12} /> {e.location}</span>}
+        {e.participants?.length > 0 && <span><Users size={12} /> {e.participants.length}</span>}
+        {plan?.checklist.total > 0 && <span className={plan.checklist.done === plan.checklist.total ? 'ok' : ''}><Check size={12} /> {plan.checklist.done}/{plan.checklist.total}</span>}
+        {e.thread?.total > 0 && <span><MessageCircle size={12} /> {e.thread.total}</span>}
+        {plan && !plan.checklist.total && <span><ListChecks size={12} /> plan</span>}
+      </span>
+    </button>
   );
 }

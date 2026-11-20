@@ -5,7 +5,9 @@ import {
 import { api, emitChange, useApi } from '../lib/api';
 import { useMe } from '../lib/session';
 import { dueLabel, todayLocal } from '../lib/format';
-import { EARLY_OPTIONS, LISTS, listByModule } from '../lib/lists';
+import { EARLY_OPTIONS, listByModule } from '../lib/lists';
+import { useLists } from '../lib/useLists';
+import { Linked } from './Linked';
 import { Thread } from './Thread';
 import { Confirm, ErrorNote, Loading, useAction, useToast } from './ui';
 import { History, Images, Reactions } from './EntitySheet';
@@ -44,7 +46,9 @@ export function ItemSheet({ id, onClose, startInChat }: { id: string; onClose: (
   const today = todayLocal(me.household.timezone);
   const { data, error, reload } = useApi<{ item: any }>(`/items/${id}`);
   const item = data?.item;
-  const { data: cats } = useApi<{ categories: any[] }>(item ? `/modules/${item.module}/categories` : null, [item?.module]);
+  const { lists } = useLists();
+  const { data: cats } = useApi<{ categories: any[] }>(item ? (item.module === 'custom' ? `/lists/${item.list_id}/sections` : `/modules/${item.module}/categories`) : null, [item?.module, item?.list_id]);
+  const keyOf = (it: any) => (it.module === 'custom' ? it.list_id : it.module);
   const [f, setF] = useState<any>(null);
   const [newSub, setNewSub] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -57,7 +61,7 @@ export function ItemSheet({ id, onClose, startInChat }: { id: string; onClose: (
       setF({
         title: item.title, notes: item.notes ?? '', link_url: item.link_url ?? '', due_date: item.due_date ?? '', due_time: item.due_time?.slice(0, 5) ?? '',
         urgent: item.urgent, flagged: item.flagged, repeat_unit: item.repeat_unit ?? '', early: item.early_reminder_minutes == null ? '' : String(item.early_reminder_minutes),
-        module: item.module, category_id: item.category_id ?? '', tags: (item.tags ?? []).join(', '), priority: item.priority, private: item.private,
+        module: keyOf(item), category_id: item.category_id ?? '', tags: (item.tags ?? []).join(', '), priority: item.priority, private: item.private,
         quantity: item.quantity ?? '', unit: item.unit ?? '', store: item.store ?? '', price: item.price_cents != null ? (item.price_cents / 100).toFixed(2) : '',
       });
     }
@@ -85,8 +89,10 @@ export function ItemSheet({ id, onClose, startInChat }: { id: string; onClose: (
       price_cents: f.price === '' ? null : Math.round(Number(String(f.price).replace(',', '.')) * 100),
       currency: f.price === '' ? null : me.household.currency,
     };
-    if (f.module !== item.module) body.module = f.module;
-    else body.category_id = f.category_id || null;
+    if (f.module !== keyOf(item)) {
+      const target = lists.find((l) => l.key === f.module);
+      if (target?.module === 'custom') { body.module = 'custom'; body.list_id = target.id; } else body.module = f.module;
+    } else body.category_id = f.category_id || null;
     await api.patch(`/items/${item.id}`, body);
     if (f.private !== item.private) await api.post(`/items/${item.id}/privacy`, { private: f.private });
     emitChange();
@@ -100,7 +106,10 @@ export function ItemSheet({ id, onClose, startInChat }: { id: string; onClose: (
     emitChange();
   });
 
-  const list = f ? listByModule(f.module) : null;
+  const listOptions = item && item.module === 'custom' && !lists.some((l) => l.key === item.list_id)
+    ? [...lists, { key: item.list_id, label: item.list?.name ?? 'This list', color: item.list?.color ?? 'var(--muted)', emoji: item.list?.emoji ?? '📝' }]
+    : lists;
+  const list = f ? (listOptions.find((l) => l.key === f.module) ?? listByModule(f.module)) : null;
   const subs: any[] = item?.subtask_list ?? [];
 
   return (
@@ -115,7 +124,7 @@ export function ItemSheet({ id, onClose, startInChat }: { id: string; onClose: (
           <ErrorNote error={error} />
           {!item || !f ? <Loading /> : <>
             <div className="seg-tabs" role="tablist">
-              {(['details', 'chat', 'history'] as const).map((t) => (
+              {(item.module === 'grocery' ? (['details', 'history'] as const) : (['details', 'chat', 'history'] as const)).map((t) => (
                 <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? 'on' : ''} onClick={() => setTab(t)}>
                   {t === 'details' ? 'Details' : t === 'chat' ? <>Chat{item.thread.total ? ` · ${item.thread.total}` : ''}{item.thread.unread ? <b className="badge inline">{item.thread.unread}</b> : null}</> : 'History'}
                 </button>
@@ -173,11 +182,11 @@ export function ItemSheet({ id, onClose, startInChat }: { id: string; onClose: (
               <section className="group">
                 <Cell icon={<span className="list-icon" style={{ background: list!.color }}>{list!.emoji}</span>} label="List">
                   <select className="plain-select" value={f.module} onChange={(e) => setF((x: any) => ({ ...x, module: e.target.value, category_id: '' }))} aria-label="List">
-                    {LISTS.map((l) => <option key={l.module} value={l.module}>{l.label}</option>)}
+                    {listOptions.map((l) => <option key={l.key} value={l.key}>{l.label}</option>)}
                   </select>
                 </Cell>
                 <Cell icon={<LayoutList size={18} />} label="Section">
-                  {f.module !== item.module ? <span className="muted small">Matched by name</span> : (
+                  {f.module !== keyOf(item) ? <span className="muted small">Matched by name</span> : (
                     <select className="plain-select" value={f.category_id} onChange={(e) => set('category_id', e.target.value)} aria-label="Section">
                       <option value="">None</option>
                       {cats?.categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -240,7 +249,7 @@ export function ItemSheet({ id, onClose, startInChat }: { id: string; onClose: (
               {!item.private && <section className="group pad"><Reactions type="item" entity={item} onChange={reload} /></section>}
 
               <div className="actions-row">
-                <button className="btn small ghost" onClick={() => setTab('chat')}><MessageCircle size={14} /> Chat about this</button>
+                {item.module !== 'grocery' && <button className="btn small ghost" onClick={() => setTab('chat')}><MessageCircle size={14} /> Chat about this</button>}
                 <button className="btn small ghost" aria-pressed={item.favorite} onClick={() => run(async () => { await api.post(`/entities/item/${item.id}/favorite`, { favorite: !item.favorite }); reload(); })}>
                   <Star size={14} fill={item.favorite ? 'currentColor' : 'none'} /> Favourite
                 </button>
@@ -255,6 +264,7 @@ export function ItemSheet({ id, onClose, startInChat }: { id: string; onClose: (
 
             {tab === 'chat' && (
               <div ref={chatRef} className="group pad">
+                <Linked type="item" id={item.id} compact />
                 <Thread type="item" id={item.id} space={item.private ? 'me' : 'us'} autoFocus placeholder={`Comment on “${item.title}”… type @ to link a card`} />
                 <p className="muted tiny">This chat is also saved as a card on the Chat page.</p>
               </div>

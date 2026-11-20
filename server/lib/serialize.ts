@@ -8,7 +8,7 @@ import { spaceOf, type Auth } from './access.js';
  */
 export async function decorate<T extends { id: string; workspace_id: string }>(
   auth: Auth,
-  type: 'item' | 'task' | 'event' | 'inventory' | 'expense' | 'topic',
+  type: 'item' | 'task' | 'event' | 'inventory' | 'expense' | 'topic' | 'pin' | 'list',
   rows: T[],
 ): Promise<(T & Record<string, unknown>)[]> {
   if (!rows.length) return [];
@@ -17,7 +17,7 @@ export async function decorate<T extends { id: string; workspace_id: string }>(
     q<{ entity_id: string; total: number; unread: number; last_at: Date | null }>(
       `SELECT t.entity_id,
               count(m.id) FILTER (WHERE m.deleted_at IS NULL)::int AS total,
-              count(m.id) FILTER (WHERE m.deleted_at IS NULL AND m.author_id IS DISTINCT FROM $3 AND m.created_at > COALESCE(r.last_read_at, 'epoch'))::int AS unread,
+              count(m.id) FILTER (WHERE m.deleted_at IS NULL AND m.author_id IS DISTINCT FROM $3 AND m.mirrored_from_id IS NULL AND m.created_at > COALESCE(r.last_read_at, 'epoch'))::int AS unread,
               max(m.created_at) AS last_at
          FROM threads t
          LEFT JOIN messages m ON m.thread_id = t.id

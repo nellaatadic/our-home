@@ -1,5 +1,7 @@
 # Feature checklist
 
+**Layout (2026-11-20):** phone-first. One column on every screen (centred on computers), a bell with a notifications pop-up and search at the top, and five symbols at the bottom: Home, Board, Chat, Data, Settings. Lists and the calendar open from Home; details open as pop-ups on top of the current screen instead of new pages.
+
 **Legend**
 
 - ✅ **Works out of the box:** covered by automated tests and/or checked in the running app.
@@ -16,9 +18,12 @@
 | Sessions, CSRF protection, rate limiting, scrypt passwords, password change | ✅ |
 | Household defaults: America/Toronto, CAD | ✅ tested |
 
-## Lists (Groceries · Home & Gadgets · Shopping & Other)
+## Lists (Groceries · Home & Gadgets · Shopping & Other · your own)
 | Feature | Status |
 |---|---|
+| Make your own lists (name, icon, colour, sections; shared or private) from the sidebar or the dashboard; each gets a page, a dashboard widget and a place in the item sheet's List picker | ✅ tested |
+| Archive a list (with everything in it) and restore it; delete it for good from the Archive (shared lists ask for confirmation) | ✅ tested |
+| A locked item can stay in a shared list, hidden from your partner; everything in a private list is private | ✅ tested |
 | Same structure for all three: NEED / STOCK, sections (categories), tap the circle to mark bought or ran out | ✅ tested |
 | Search icon opens search plus filters (section, priority, added by, shared/private, flagged, urgent, has a date) and sorting | ✅ tested |
 | Scan receipt button on Groceries (photo, PDF or pasted text → review → ticks off NEED items, adds to STOCK) | ✅ tested (Scenario F) |
@@ -32,13 +37,44 @@
 |---|---|
 | Comment button next to every item: quick chat on the spot, with photos, files and links | ✅ |
 | Chat page: every conversation as a small card (title only), expandable inline; one ongoing chat between you two on the right | ✅ tested |
-| Type @ to mention your partner or link any shared card (item, event, to-do, topic); links open the card | ✅ tested |
+| Type @ to mention your partner or link any shared card (item, list, event, plan, to-do, topic, pin); links open the card | ✅ tested |
+| Reply to a message in Our chat that tags a card, and the message and its replies are copied into that card's chat (marked “Our chat”; edits and deletions follow; not counted as unread twice) | ✅ tested |
+| “Linked” strip above each card's chat: what it links to, where it was mentioned, and everything sharing its tags | ✅ tested |
 | Topics: conversations not tied to an item (can be private) | ✅ tested |
 | Replies, edit and delete your own messages, read / unread, unread badge | ✅ |
 | Notifications: mentions, replies, assignments, reminders, calendar changes, reactions; per-type preferences | ✅ |
 | Email / push notifications | ⚠️ not built (in-app only) |
 
-## Dashboard
+## Board
+| Feature | Status |
+|---|---|
+| A wall that scrolls down: sticky notes (7 colours), big words, photos and links (with a preview); drag to move, pull the corner to resize, double-click to rename | ✅ tested (API), checked in the browser |
+| Pins are named “New sticky 1, 2…” unless you name them, can be @-mentioned in chat, have their own chat, and can be locked or archived | ✅ tested |
+| The main chat sits beside the wall; on a phone the pins stack in one column | ✅ checked in the browser |
+
+## Plans
+| Feature | Status |
+|---|---|
+| Every event opens as a pop-up (from the calendar's cards or Home) with details, people, a checklist (who and by when), lists of its own, tags, linked cards and its chat; adding a step or a list makes it a plan | ✅ tested |
+| Plans show on the dashboard with checklist progress; checklist steps appear in To do & reminders | ✅ tested |
+| The day after a plan ends it asks “Archive it?” (Not yet stops asking); archiving keeps its checklist and lists together and restores them together | ✅ tested |
+
+## Share to OUR HOME
+| Feature | Status |
+|---|---|
+| A share page that asks where a link or text should go: any list, a to-do, the calendar, the Board, Our chat or a plan's chat | ✅ checked in the browser |
+| Android: installed app appears in the share menu (Web Share Target) | ⚠️ needs the deployed site (HTTPS); not tested on a device |
+| iPhone: one-time Shortcut, steps in Settings (iOS does not let web apps join the share menu directly) | ⚠️ not tested on a device |
+| Computer: bookmarklet in Settings | ✅ |
+
+## Home
+| Feature | Status |
+|---|---|
+| Greeting and date (tap the date for the calendar); every list as a card with a two-item preview, “+ N more” opens the whole list in place, last update time; Important Dates and To do & Reminders cards; dashed card to make a new list | ✅ checked in the browser |
+| Each list has one chat (“@groceries”) that slides in beside the cards; grocery items have no chat of their own, other lists' items keep theirs | ✅ tested |
+| Swipe an item right for Flag and Urgent, left for Details and Remove (with Undo) | ✅ checked in the browser |
+
+## Dashboard (earlier layout)
 | Feature | Status |
 |---|---|
 | Row 1: greeting and date, then Groceries, Home & Gadgets, Shopping & Other widgets: add (shared or locked), items shown (3–12), size (S/M/L), hide, expand to full list | ✅ tested |
