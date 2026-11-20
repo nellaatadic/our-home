@@ -17,11 +17,21 @@ export interface ListDef {
 }
 
 /** Soft colours offered for a new list (Paper theme). */
-export const LIST_COLORS = ['#6f8a5e', '#c08a3e', '#b4687a', '#5f7f99', '#8a6fa8', '#b5562f', '#7d7466', '#4f8a83'];
-export const LIST_EMOJI = ['📝', '📚', '🎁', '🎉', '✈️', '🌱', '🍷', '🧸', '🎬', '🏡', '🧺', '💡', '🛠️', '🎨', '🐾', '❤️'];
+export const LIST_COLORS = ['#bcd68e', '#cfb0b8', '#6a87bd', '#e7c27d', '#9fcac0', '#c4a9da', '#e9a58c', '#b8b2a7'];
 
-export function builtinDefs(ids: Record<string, string> = {}): ListDef[] {
-  return LISTS.map((l) => ({ ...l, key: l.module, id: ids[l.module] ?? null, builtin: true, private: false }));
+/** Soft card colours, like the mockup (pistachio, mauve, denim…). */
+export const CARD_COLORS = ['#bcd68e', '#cfb0b8', '#6a87bd', '#e7c27d', '#9fcac0', '#c4a9da', '#e9a58c', '#b8b2a7'];
+
+/** References: @ points at a whole card (list, event, topic, sticky), # at one thing in it (item, to-do). */
+export const HASH_TYPES = new Set(['item', 'task']);
+export const refPrefix = (type: string) => (HASH_TYPES.has(type) ? '#' : '@');
+export const LIST_EMOJI = ['📝', '📚', '🎁', '🎉', '✈️', '🌱', '🍷', '🧸', '🎬', '🏡', '🧺', '💡', '🛠️', '🎨', '🐾', '❤️', '🥕', '🛋️', '🛍️', '🎂', '✅', '📅', '⭐', '🍽️'];
+
+export function builtinDefs(ids: Record<string, string> = {}, style: Record<string, { emoji: string | null; color: string | null }> = {}): ListDef[] {
+  return LISTS.map((l) => ({
+    ...l, key: l.module, id: ids[l.module] ?? null, builtin: true, private: false,
+    emoji: style[l.module]?.emoji ?? l.emoji, color: style[l.module]?.color ?? l.color,
+  }));
 }
 
 export function customDef(l: { id: string; name: string; emoji: string | null; color: string | null; private: boolean; need?: number }, i = 0): ListDef {

@@ -2,7 +2,7 @@ import { createContext, useContext, useMemo, type ReactNode } from 'react';
 import { useApi } from './api';
 import { builtinDefs, customDef, type ListDef } from './lists';
 
-interface Nav { builtin: Record<string, string>; custom: { id: string; name: string; emoji: string | null; color: string | null; private: boolean; need: number }[] }
+interface Nav { builtin: Record<string, string>; builtin_style?: Record<string, { emoji: string | null; color: string | null }>; custom: { id: string; name: string; emoji: string | null; color: string | null; private: boolean; need: number }[] }
 interface Ctx { lists: ListDef[]; ready: boolean; reload: () => void }
 
 const ListsContext = createContext<Ctx>({ lists: builtinDefs(), ready: false, reload: () => {} });
@@ -11,7 +11,7 @@ const ListsContext = createContext<Ctx>({ lists: builtinDefs(), ready: false, re
 export function ListsProvider({ children }: { children: ReactNode }) {
   const { data, reload } = useApi<Nav>('/lists/nav');
   const value = useMemo<Ctx>(() => ({
-    lists: [...builtinDefs(data?.builtin), ...(data?.custom ?? []).map((l, i) => customDef(l, i))],
+    lists: [...builtinDefs(data?.builtin, data?.builtin_style), ...(data?.custom ?? []).map((l, i) => customDef(l, i))],
     ready: Boolean(data),
     reload,
   }), [data, reload]);

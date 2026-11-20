@@ -62,7 +62,7 @@ chatRoutes.get('/chat/cards', async (c) => {
        -- Topics nobody has written in yet still show up as cards.
        SELECT NULL, 'topic', tp.id, tp.workspace_id, tp.title, NULL, NULL::uuid, NULL::boolean, 0, 0, tp.created_at
          FROM topics tp
-        WHERE tp.workspace_id = ANY($1::uuid[]) AND NOT tp.is_general AND tp.archived_at IS NULL
+        WHERE tp.workspace_id = ANY($1::uuid[]) AND NOT tp.is_general AND tp.card_key IS NULL AND tp.archived_at IS NULL
           AND NOT EXISTS (SELECT 1 FROM threads t JOIN messages m ON m.thread_id = t.id WHERE t.entity_type = 'topic' AND t.entity_id = tp.id)
      )
      SELECT cards.*,
@@ -102,8 +102,8 @@ chatRoutes.patch('/topics/:id', async (c) => {
   const row = await loadEntity<any>(a, 'topic', c.req.param('id'));
   const b = parse(z.object({ title: z.string().trim().min(1).max(120).optional(), archived: z.boolean().optional() }), await c.req.json());
   const updated = await q1(
-    `UPDATE topics SET title = COALESCE($2, title), updated_at = now(),
-       archived_at = CASE WHEN $3::boolean IS NULL OR is_general THEN archived_at WHEN $3 THEN now() ELSE NULL END
+    `UPDATE topics SET title = CASE WHEN card_key IS NULL THEN COALESCE($2, title) ELSE title END, updated_at = now(),
+       archived_at = CASE WHEN $3::boolean IS NULL OR is_general OR card_key IS NOT NULL THEN archived_at WHEN $3 THEN now() ELSE NULL END
      WHERE id = $1 RETURNING *`,
     [row.id, b.title ?? null, b.archived ?? null],
   );
@@ -117,12 +117,12 @@ chatRoutes.patch('/topics/:id', async (c) => {
  */
 chatRoutes.get('/chat/references', async (c) => {
   const a = requireAuth(c);
-  const f = parse(z.object({ q: z.string().max(100).optional(), scope: z.enum(['us', 'all']).optional() }), c.req.query());
+  const f = parse(z.object({ q: z.string().max(100).optional(), scope: z.enum(['us', 'all']).optional(), kind: z.enum(['cards', 'items']).optional() }), c.req.query());
   const wss = f.scope === 'all' ? accessibleWorkspaceIds(a) : [a.sharedWorkspaceId];
   const term = f.q?.trim() || null;
   const rows = await q<any>(
     `(SELECT 'item' AS type, i.id, i.title, CASE WHEN i.module = 'custom' THEN l.name ELSE i.module END AS sub, i.updated_at FROM items i JOIN lists l ON l.id = i.list_id
-        WHERE i.workspace_id = ANY($1::uuid[]) AND i.archived_at IS NULL AND ($2::text IS NULL OR i.title ILIKE '%' || $2 || '%') ORDER BY i.updated_at DESC LIMIT 8)
+        WHERE i.workspace_id = ANY($1::uuid[]) AND i.archived_at IS NULL AND ($2::text IS NULL OR i.title ILIKE '%' || $2 || '%') ORDER BY i.updated_at DESC LIMIT 10)
      UNION ALL
      (SELECT 'list', id, CASE module WHEN 'grocery' THEN 'Groceries' WHEN 'home' THEN 'Home & Gadgets' WHEN 'idea' THEN 'Shopping & Other' ELSE name END,
              CASE WHEN event_id IS NULL THEN 'list' ELSE 'plan list' END, updated_at FROM lists
@@ -144,7 +144,11 @@ chatRoutes.get('/chat/references', async (c) => {
     [wss, term, a.sharedWorkspaceId],
   );
   const label: Record<string, string> = { grocery: 'Groceries', home: 'Home & Gadgets', idea: 'Shopping & Other' };
-  return c.json({ references: rows.map((r) => ({ type: r.type, id: r.id, title: r.title, subtitle: label[r.sub] ?? r.sub })) });
+  // @ offers whole cards (lists, events, topics, stickies); # offers things inside them (items, to-dos).
+  const wanted = f.kind === 'items' ? ['item', 'task'] : f.kind === 'cards' ? ['list', 'event', 'topic', 'pin'] : null;
+  return c.json({
+    references: rows.filter((r) => !wanted || wanted.includes(r.type)).map((r) => ({ type: r.type, id: r.id, title: r.title, subtitle: label[r.sub] ?? r.sub })),
+  });
 });
 
 /** Unread messages across all conversations, for the Chat badge. */

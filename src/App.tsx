@@ -2,6 +2,7 @@ import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useSession } from './lib/session';
 import { Layout } from './components/Layout';
 import { ListsProvider } from './lib/useLists';
+import { NickProvider } from './lib/nick';
 import { Loading } from './components/ui';
 import { LoginPage, RegisterPage, InvitePage } from './pages/Auth';
 import { DashboardPage } from './pages/Dashboard';
@@ -34,7 +35,7 @@ export function App() {
     );
   }
   return (
-    <ListsProvider>
+    <ListsProvider><NickProvider>
     <Layout>
       <Routes>
         <Route path="/" element={<DashboardPage />} />
@@ -62,6 +63,6 @@ export function App() {
         <Route path="*" element={<div className="page"><h1>Not found</h1></div>} />
       </Routes>
     </Layout>
-    </ListsProvider>
+    </NickProvider></ListsProvider>
   );
 }

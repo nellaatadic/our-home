@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { CalendarDays, ChevronDown, ChevronRight, CheckSquare, ClipboardList, Hash, Lock, MessagesSquare, Plus, Search, StickyNote } from 'lucide-react';
+import { CalendarDays, ChevronDown, ChevronRight, CheckSquare, ClipboardList, Hash, Lock, Plus, Search, StickyNote } from 'lucide-react';
 import { api, emitChange, useApi } from '../lib/api';
 import { useMe } from '../lib/session';
 import { relative } from '../lib/format';
@@ -9,6 +9,7 @@ import { previewText, Thread } from '../components/Thread';
 import { cardPath, useOpen } from '../components/Layout';
 import { Linked } from '../components/Linked';
 import { useLists } from '../lib/useLists';
+import { useNick } from '../lib/nick';
 import { Empty, Field, Loading, Sheet, useAction } from '../components/ui';
 
 interface Card { entity_type: string; entity_id: string; title: string; module: string | null; list_id: string | null; is_plan: boolean; space: 'me' | 'us'; total: number; unread: number; last_at: string; last_body: string; last_author: string | null }
@@ -32,6 +33,7 @@ function CardIcon({ c }: { c: Card }) {
  */
 export function ChatPage() {
   const me = useMe();
+  const { name: nick, swap: swapName } = useNick();
   const open = useOpen();
   const nav = useNavigate();
   const [params, setParams] = useSearchParams();
@@ -56,9 +58,9 @@ export function ChatPage() {
   return (
     <div className="page chat-page">
       <header className="page-head compact">
-        <h1><MessagesSquare size={22} /> Chat</h1>
+        <h1>{me.partner ? nick(me.partner.id) : 'Chat'}</h1>
         <div className="seg-tabs mobile-only" role="tablist">
-          <button role="tab" aria-selected={mobileTab === 'chat'} className={mobileTab === 'chat' ? 'on' : ''} onClick={() => setMobileTab('chat')}>Our chat</button>
+          <button role="tab" aria-selected={mobileTab === 'chat'} className={mobileTab === 'chat' ? 'on' : ''} onClick={() => setMobileTab('chat')}>Us</button>
           <button role="tab" aria-selected={mobileTab === 'cards'} className={mobileTab === 'cards' ? 'on' : ''} onClick={() => setMobileTab('cards')}>Topics {cards.reduce((s, c) => s + c.unread, 0) ? <b className="badge inline">{cards.reduce((s, c) => s + c.unread, 0)}</b> : null}</button>
         </div>
       </header>
@@ -87,11 +89,11 @@ export function ChatPage() {
                       {c.unread > 0 && <b className="badge">{c.unread}</b>}
                       {isOpen ? <ChevronDown size={15} className="muted" /> : <ChevronRight size={15} className="muted" />}
                     </button>
-                    {!isOpen && c.last_body && <p className="chat-card-last clamp1">{c.last_author ? `${c.last_author === me.user.display_name ? 'You' : c.last_author}: ` : ''}{previewText(c.last_body)} <span className="muted">· {relative(c.last_at)}</span></p>}
+                    {!isOpen && c.last_body && <p className="chat-card-last clamp1">{c.last_author ? `${c.last_author === me.user.display_name ? 'You' : swapName(c.last_author)}: ` : ''}{previewText(c.last_body)} <span className="muted">· {relative(c.last_at)}</span></p>}
                     {isOpen && (
                       <div className="chat-card-body">
                         <Linked type={c.entity_type} id={c.entity_id} compact />
-                        <Thread type={c.entity_type} id={c.entity_id} space={c.space} compact placeholder="Reply… (@ to link a card)" />
+                        <Thread type={c.entity_type} id={c.entity_id} space={c.space} compact />
                         {c.entity_type !== 'topic' && (
                           <button className="link-btn" onClick={() => { const p = cardPath(c.entity_type, c.entity_id, { is_plan: c.is_plan }); if (p) nav(p); else open(c.entity_type as any, c.entity_id); }}>
                             Open {c.entity_type === 'item' ? 'item' : c.entity_type === 'pin' ? 'on the Board' : c.entity_type === 'event' ? (c.is_plan ? 'plan' : 'event') : 'to-do'}
@@ -106,11 +108,7 @@ export function ChatPage() {
           )}
         </aside>
         <section className="chat-main" aria-label="Our chat">
-          <header className="chat-main-head">
-            <b>{me.members.map((m) => m.display_name).join(' & ')}</b>
-            <span className="muted small">Type @ to mention or link any card</span>
-          </header>
-          {general ? <Thread type="topic" id={general.topic.id} space="us" placeholder={`Message ${me.partner?.display_name ?? ''}… type @ to link a card`} /> : <Loading />}
+          {general ? <Thread type="topic" id={general.topic.id} space="us" /> : <Loading />}
         </section>
       </div>
       {newTopic && <NewTopicSheet onClose={() => setNewTopic(false)} onCreated={(id) => { setNewTopic(false); setExpanded(`topic:${id}`); setMobileTab('cards'); }} />}

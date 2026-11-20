@@ -1,4 +1,6 @@
 import { Hono } from 'hono';
+import { z } from 'zod';
+import { parse } from '../lib/http.js';
 import { q, q1 } from '../db.js';
 import { requireAuth } from '../lib/auth.js';
 import { accessibleWorkspaceIds, type AppEnv, type Auth } from '../lib/access.js';
@@ -43,18 +45,22 @@ homeRoutes.get('/dashboard', async (c) => {
     ...(['grocery', 'home', 'idea'] as const).map((m) => ({ key: m, module: m, listId: null })),
     ...custom.map((l) => ({ key: l.id, module: 'custom', listId: l.id })),
   ];
-  const lists: Record<string, { items: any[]; need: number; stock: number }> = {};
+  const lists: Record<string, { items: any[]; need: number; stock: number; completed?: any[] }> = {};
   for (const k of keys) {
     const w = prefs.widgets[k.key] ?? (prefs.widgets[k.key] = { max: 5, size: 's', hidden: false });
-    const [rows, counts] = await Promise.all([
+    const [rows, counts, completed] = await Promise.all([
       q(`SELECT i.* FROM items i WHERE i.workspace_id = ANY($1::uuid[]) AND i.module = $2 AND ($4::uuid IS NULL OR i.list_id = $4)
            AND i.grocery_state = 'need' AND i.archived_at IS NULL ORDER BY ${NEED_ORDER} LIMIT $3`,
         [wss, k.module, w.max, k.listId]),
       q1<any>(`SELECT count(*) FILTER (WHERE grocery_state = 'need' AND archived_at IS NULL)::int AS need,
                       count(*) FILTER (WHERE grocery_state = 'stock' AND archived_at IS NULL)::int AS stock, max(updated_at) AS updated_at
                  FROM items WHERE workspace_id = ANY($1::uuid[]) AND module = $2 AND ($3::uuid IS NULL OR list_id = $3)`, [wss, k.module, k.listId]),
+      recentlyCompleted(wss, k.module, k.listId),
     ]);
-    lists[k.key] = { items: await serializeItems(a, rows), need: counts?.need ?? 0, stock: counts?.stock ?? 0, updated_at: counts?.updated_at ?? null } as any;
+    lists[k.key] = {
+      items: await serializeItems(a, rows), need: counts?.need ?? 0, stock: counts?.stock ?? 0, updated_at: counts?.updated_at ?? null,
+      completed: await serializeItems(a, completed),
+    } as any;
   }
 
   // Important dates: the next four months of birthdays, anniversaries, social events, holidays.
@@ -82,6 +88,7 @@ homeRoutes.get('/dashboard', async (c) => {
   ]);
 
   return c.json({
+    cards: await homeCards(a),
     today,
     timezone: tz,
     prefs,
@@ -94,4 +101,60 @@ homeRoutes.get('/dashboard', async (c) => {
     partner_busy: busy,
     unread_messages: unread?.n ?? 0,
   });
+});
+
+/**
+ * Ticked-off items stay under "Completed" so a slip of the finger can be
+ * undone. They go away once both of you have seen it: a quarter of an hour for
+ * the one who ticked it, and until the partner has read the "completed" line.
+ */
+export async function recentlyCompleted(wss: string[], module: string, listId: string | null) {
+  return q(
+    `SELECT i.* FROM items i
+      WHERE i.workspace_id = ANY($1::uuid[]) AND i.module = $2 AND ($3::uuid IS NULL OR i.list_id = $3)
+        AND i.completed_at > now() - interval '3 days'
+        AND (i.grocery_state = 'stock' OR i.archived_at IS NOT NULL)
+        AND (i.completed_at > now() - interval '15 minutes'
+             OR EXISTS (SELECT 1 FROM notifications n WHERE n.entity_type = 'item' AND n.entity_id = i.id AND n.type = 'activity'
+                          AND n.dedupe_key LIKE 'completed:%' AND n.read_at IS NULL))
+      ORDER BY i.completed_at DESC LIMIT 12`,
+    [wss, module, listId],
+  );
+}
+
+const CARD_TITLES = { dates: 'Important Dates', todos: 'To do & Reminders' } as const;
+type CardKey = keyof typeof CARD_TITLES;
+
+/** The Important Dates and To do cards: each has a chat (a shared topic) and its own emoji and colour. */
+export async function homeCard(a: Auth, key: CardKey) {
+  const existing = await q1<any>('SELECT * FROM topics WHERE workspace_id = $1 AND card_key = $2', [a.sharedWorkspaceId, key]);
+  if (existing) return existing;
+  return q1<any>(
+    `INSERT INTO topics (workspace_id, title, card_key, created_by) VALUES ($1,$2,$3,$4)
+     ON CONFLICT (workspace_id, card_key) WHERE card_key IS NOT NULL DO UPDATE SET title = topics.title RETURNING *`,
+    [a.sharedWorkspaceId, CARD_TITLES[key], key, a.user.id],
+  );
+}
+
+async function homeCards(a: Auth) {
+  const out: Record<string, { topic_id: string; emoji: string | null; color: string | null; unread: number }> = {};
+  for (const key of Object.keys(CARD_TITLES) as CardKey[]) {
+    const t = await homeCard(a, key);
+    const u = await q1<{ n: number }>(
+      `SELECT count(*)::int AS n FROM threads th JOIN messages m ON m.thread_id = th.id
+         LEFT JOIN thread_reads r ON r.thread_id = th.id AND r.user_id = $2
+        WHERE th.entity_type = 'topic' AND th.entity_id = $1 AND m.author_id IS DISTINCT FROM $2 AND m.deleted_at IS NULL
+          AND m.mirrored_from_id IS NULL AND m.created_at > COALESCE(r.last_read_at, 'epoch')`, [t.id, a.user.id]);
+    out[key] = { topic_id: t.id, emoji: t.emoji, color: t.color, unread: u?.n ?? 0 };
+  }
+  return out;
+}
+
+homeRoutes.patch('/home/cards/:key', async (c) => {
+  const a = requireAuth(c);
+  const key = parse(z.enum(['dates', 'todos']), c.req.param('key'));
+  const b = parse(z.object({ emoji: z.string().trim().min(1).max(16).optional(), color: z.string().regex(/^#[0-9a-f]{6}$/i).optional() }), await c.req.json());
+  const t = await homeCard(a, key);
+  await q('UPDATE topics SET emoji = COALESCE($2, emoji), color = COALESCE($3, color), updated_at = now() WHERE id = $1', [t.id, b.emoji ?? null, b.color ?? null]);
+  return c.json({ cards: await homeCards(a) });
 });

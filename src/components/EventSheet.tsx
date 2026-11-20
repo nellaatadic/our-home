@@ -134,7 +134,7 @@ export function EventSheet({ id, onClose, startInChat }: { id: string; onClose: 
 
           <section className="ep-block ep-chat">
             <h3><MessageCircle size={14} /> Chat</h3>
-            <Thread type="event" id={e.id} space={e.space} compact={!startInChat} autoFocus={startInChat} placeholder="Talk about it… @ to link anything" />
+            <Thread type="event" id={e.id} space={e.space} compact={!startInChat} autoFocus={startInChat} />
           </section>
           {e.space === 'us' && <Reactions type="event" entity={e} onChange={reloadEvent} />}
         </>}

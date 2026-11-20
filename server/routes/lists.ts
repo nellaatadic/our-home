@@ -232,7 +232,7 @@ listRoutes.get('/lists/nav', async (c) => {
   const a = requireAuth(c);
   const wss = accessibleWorkspaceIds(a);
   const [builtin, custom] = await Promise.all([
-    q<any>(`SELECT id, module FROM lists WHERE workspace_id = $1 AND is_default AND module <> 'custom'`, [a.sharedWorkspaceId]),
+    q<any>(`SELECT id, module, emoji, color FROM lists WHERE workspace_id = $1 AND is_default AND module <> 'custom'`, [a.sharedWorkspaceId]),
     q<any>(
       `SELECT l.id, l.name, l.emoji, l.color, l.workspace_id, l.created_by, l.created_at,
               (SELECT count(*)::int FROM items i WHERE i.list_id = l.id AND i.archived_at IS NULL AND i.grocery_state = 'need' AND i.workspace_id = ANY($1::uuid[])) AS need
@@ -243,6 +243,7 @@ listRoutes.get('/lists/nav', async (c) => {
   ]);
   return c.json({
     builtin: Object.fromEntries(builtin.map((b) => [b.module, b.id])),
+    builtin_style: Object.fromEntries(builtin.map((b) => [b.module, { emoji: b.emoji, color: b.color }])),
     custom: custom.map(({ workspace_id, ...l }) => ({ ...l, private: workspace_id === a.personalWorkspaceId })),
   });
 });

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
-  AlarmClock, Archive, ArchiveRestore, Bell, Calendar, Check, Clock, ExternalLink, Flag, Hash, LayoutList, ListChecks, Lock, MessageCircle, Plus, Repeat, Star, Trash2, X,
+  AlarmClock, Archive, ArchiveRestore, Bell, Calendar, Check, ExternalLink, Hash, LayoutList, ListChecks, Lock, MessageCircle, Plus, Repeat, Star, Trash2, X,
 } from 'lucide-react';
 import { api, emitChange, useApi } from '../lib/api';
 import { useMe } from '../lib/session';
@@ -52,6 +52,7 @@ export function ItemSheet({ id, onClose, startInChat }: { id: string; onClose: (
   const [f, setF] = useState<any>(null);
   const [newSub, setNewSub] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [tagsOpen, setTagsOpen] = useState(false);
   const [tab, setTab] = useState<'details' | 'chat' | 'history'>(startInChat ? 'chat' : 'details');
   const { busy, run } = useAction();
   const chatRef = useRef<HTMLDivElement>(null);
@@ -82,7 +83,7 @@ export function ItemSheet({ id, onClose, startInChat }: { id: string; onClose: (
     const body: any = {
       title: f.title.trim(), notes: f.notes, link_url: f.link_url.trim() || null,
       due_date: f.due_date || null, due_time: f.due_date && f.due_time ? f.due_time : null,
-      urgent: Boolean(f.urgent), flagged: Boolean(f.flagged), repeat_unit: f.due_date && f.repeat_unit ? f.repeat_unit : null,
+      urgent: Boolean(f.urgent), flagged: Boolean(f.urgent), repeat_unit: f.due_date && f.repeat_unit ? f.repeat_unit : null,
       early_reminder_minutes: f.due_date && f.early !== '' ? Number(f.early) : null,
       priority: f.priority, tags: f.tags.split(',').map((t: string) => t.trim()).filter(Boolean),
       quantity: f.quantity === '' ? null : Number(f.quantity), unit: f.unit.trim() || null, store: f.store.trim() || null,
@@ -148,37 +149,6 @@ export function ItemSheet({ id, onClose, startInChat }: { id: string; onClose: (
                 </div>
               </section>
 
-              <h3 className="group-title">Date &amp; Time</h3>
-              <section className="group">
-                <Cell icon={<Calendar size={18} />} label="Date" sub={f.due_date ? <span className="accent">{dueLabel(f.due_date, null, today)}</span> : null}>
-                  <Switch label="Date" checked={Boolean(f.due_date)} onChange={(v) => setF((x: any) => ({ ...x, due_date: v ? today : '', due_time: v ? x.due_time : '' }))} />
-                </Cell>
-                {f.due_date && <div className="icell-extra"><input type="date" value={f.due_date} onChange={(e) => set('due_date', e.target.value)} aria-label="Date" /></div>}
-                <Cell icon={<Clock size={18} />} label="Time" sub={f.due_time ? <span className="accent">{dueLabel(f.due_date || today, f.due_time, today).split(', ')[1]}</span> : null}>
-                  <Switch label="Time" checked={Boolean(f.due_time)} onChange={(v) => setF((x: any) => ({ ...x, due_date: x.due_date || (v ? today : ''), due_time: v ? '09:00' : '' }))} />
-                </Cell>
-                {f.due_time && <div className="icell-extra"><input type="time" value={f.due_time} onChange={(e) => set('due_time', e.target.value)} aria-label="Time" /></div>}
-                <Cell icon={<AlarmClock size={18} />} label="Urgent" sub={f.urgent ? `Alarm on: ${item.private ? me.user.display_name : me.members.map((m) => m.display_name).join(' & ')}` : null}>
-                  <Switch label="Urgent" checked={Boolean(f.urgent)} onChange={(v) => set('urgent', v)} />
-                </Cell>
-              </section>
-              <p className="group-hint">{f.urgent ? 'Urgent reminders notify both of you when the item is shared.' : 'Mark this as urgent to alert everyone who can see it.'}</p>
-
-              <section className="group">
-                <Cell icon={<Repeat size={18} />} label="Repeat">
-                  <select className="plain-select" value={f.repeat_unit} onChange={(e) => setF((x: any) => ({ ...x, repeat_unit: e.target.value, due_date: x.due_date || (e.target.value ? today : '') }))} aria-label="Repeat">
-                    <option value="">Never</option><option value="day">Daily</option><option value="week">Weekly</option><option value="month">Monthly</option><option value="year">Yearly</option>
-                  </select>
-                </Cell>
-                <Cell icon={<Bell size={18} />} label="Early reminder">
-                  <select className="plain-select" value={f.early} onChange={(e) => set('early', e.target.value)} disabled={!f.due_date} aria-label="Early reminder">
-                    {EARLY_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-                  </select>
-                </Cell>
-              </section>
-              {f.repeat_unit && <p className="group-hint">When you mark it bought, it stays on the list with the next date.</p>}
-
-              <h3 className="group-title">Organization</h3>
               <section className="group">
                 <Cell icon={<span className="list-icon" style={{ background: list!.color }}>{list!.emoji}</span>} label="List">
                   <select className="plain-select" value={f.module} onChange={(e) => setF((x: any) => ({ ...x, module: e.target.value, category_id: '' }))} aria-label="List">
@@ -193,10 +163,41 @@ export function ItemSheet({ id, onClose, startInChat }: { id: string; onClose: (
                     </select>
                   )}
                 </Cell>
-                <Cell icon={<Hash size={18} />} label="Tags">
-                  <input className="plain right" value={f.tags} onChange={(e) => set('tags', e.target.value)} placeholder="Add tags" aria-label="Tags, comma separated" />
+                <Cell icon={<Calendar size={18} />} label="Date" sub={f.due_date ? <span className="accent">{dueLabel(f.due_date, f.due_time || null, today)}</span> : null}>
+                  <Switch label="Date" checked={Boolean(f.due_date)} onChange={(v) => setF((x: any) => ({ ...x, due_date: v ? today : '', due_time: v ? x.due_time : '' }))} />
                 </Cell>
-                <Cell icon={<ListChecks size={18} />} label="Subtasks"><span className="muted">{subs.filter((s) => s.done).length ? `${subs.filter((s) => s.done).length}/` : ''}{subs.length}</span></Cell>
+                {f.due_date && (
+                  <div className="icell-extra row gap-s">
+                    <input type="date" value={f.due_date} onChange={(e) => set('due_date', e.target.value)} aria-label="Date" />
+                    <input type="time" value={f.due_time} onChange={(e) => set('due_time', e.target.value)} aria-label="Time (optional)" />
+                  </div>
+                )}
+                {f.due_date && (
+                  <Cell icon={<Repeat size={18} />} label="Repeat">
+                    <select className="plain-select" value={f.repeat_unit} onChange={(e) => set('repeat_unit', e.target.value)} aria-label="Repeat">
+                      <option value="">Never</option><option value="day">Daily</option><option value="week">Weekly</option><option value="month">Monthly</option><option value="year">Yearly</option>
+                    </select>
+                  </Cell>
+                )}
+                {f.due_date && (
+                  <Cell icon={<Bell size={18} />} label="Remind me">
+                    <select className="plain-select" value={f.early} onChange={(e) => set('early', e.target.value)} aria-label="Early reminder">
+                      {EARLY_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                    </select>
+                  </Cell>
+                )}
+                <Cell icon={<AlarmClock size={18} />} label="Urgent" sub={f.urgent ? (item.private ? 'Alerts you' : 'Alerts both of you') : null}>
+                  <Switch label="Urgent" checked={Boolean(f.urgent)} onChange={(v) => set('urgent', v)} />
+                </Cell>
+                {tagsOpen || f.tags ? (
+                  <Cell icon={<Hash size={18} />} label={<input className="plain" autoFocus={tagsOpen && !f.tags} value={f.tags} onChange={(e) => set('tags', e.target.value)} onBlur={() => setTagsOpen(false)} placeholder="birthday, gift" aria-label="Tags, comma separated" />} />
+                ) : (
+                  <Cell icon={<Hash size={18} />} label={<span className="muted">No tags</span>} onClick={() => setTagsOpen(true)} />
+                )}
+              </section>
+
+              <section className="group">
+                <Cell icon={<ListChecks size={18} />} label="Subtasks"><span className="muted">{subs.filter((s) => s.done).length ? `${subs.filter((s) => s.done).length}/` : ''}{subs.length || ''}</span></Cell>
                 <ul className="subtasks">
                   {subs.map((s) => (
                     <li key={s.id}>
@@ -215,16 +216,6 @@ export function ItemSheet({ id, onClose, startInChat }: { id: string; onClose: (
               </section>
 
               <section className="group">
-                <Cell icon={<Flag size={18} />} label="Flag"><Switch label="Flag" checked={Boolean(f.flagged)} onChange={(v) => set('flagged', v)} /></Cell>
-                <Cell icon={<span className="bang">!!!</span>} label="Priority">
-                  <select className="plain-select" value={f.priority} onChange={(e) => set('priority', e.target.value)} aria-label="Priority">
-                    {PRIORITIES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
-                  </select>
-                </Cell>
-              </section>
-
-              <h3 className="group-title">Amount &amp; store</h3>
-              <section className="group">
                 <Cell label="Quantity">
                   <span className="row gap-s">
                     <input className="plain right qty" type="number" min={0} step="any" value={f.quantity} onChange={(e) => set('quantity', e.target.value)} placeholder="—" aria-label="Quantity" />
@@ -233,17 +224,11 @@ export function ItemSheet({ id, onClose, startInChat }: { id: string; onClose: (
                 </Cell>
                 <Cell label="Store"><input className="plain right" value={f.store} onChange={(e) => set('store', e.target.value)} placeholder="Any" aria-label="Store" /></Cell>
                 <Cell label="Price"><span className="row gap-s"><input className="plain right price" inputMode="decimal" value={f.price} onChange={(e) => set('price', e.target.value)} placeholder="—" aria-label="Price" /><span className="muted small">{me.household.currency}</span></span></Cell>
-              </section>
-
-              <h3 className="group-title">Privacy</h3>
-              <section className="group">
-                <Cell icon={<Lock size={18} />} label="Private" sub={f.private ? 'Only you can see this' : `Shared with ${me.partner?.display_name ?? 'your partner'}`}>
+                <Cell icon={<Lock size={18} />} label="Private" sub={!item.can_lock ? `Only ${item.created_by_name ?? 'the person who added it'} can change this` : null}>
                   <Switch label="Private" checked={Boolean(f.private)} onChange={(v) => set('private', v)} disabled={!item.can_lock} />
                 </Cell>
               </section>
-              {!item.can_lock && <p className="group-hint">Only {item.created_by_name ?? 'the person who added it'} can make this private.</p>}
 
-              <h3 className="group-title">Photos</h3>
               <section className="group pad"><Images entityType="item" entity={item} reload={reload} /></section>
 
               {!item.private && <section className="group pad"><Reactions type="item" entity={item} onChange={reload} /></section>}
@@ -265,7 +250,7 @@ export function ItemSheet({ id, onClose, startInChat }: { id: string; onClose: (
             {tab === 'chat' && (
               <div ref={chatRef} className="group pad">
                 <Linked type="item" id={item.id} compact />
-                <Thread type="item" id={item.id} space={item.private ? 'me' : 'us'} autoFocus placeholder={`Comment on “${item.title}”… type @ to link a card`} />
+                <Thread type="item" id={item.id} space={item.private ? 'me' : 'us'} autoFocus />
                 <p className="muted tiny">This chat is also saved as a card on the Chat page.</p>
               </div>
             )}

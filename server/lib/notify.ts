@@ -1,7 +1,7 @@
 import { q, q1 } from '../db.js';
 import { workspaceAudience } from './access.js';
 
-export type NotificationType = 'mention' | 'reply' | 'shared' | 'assigned' | 'reminder' | 'calendar' | 'decision';
+export type NotificationType = 'mention' | 'reply' | 'shared' | 'assigned' | 'reminder' | 'calendar' | 'decision' | 'activity';
 
 const PREF_COLUMN: Record<NotificationType, string> = {
   mention: 'notify_mentions',
@@ -11,6 +11,7 @@ const PREF_COLUMN: Record<NotificationType, string> = {
   reminder: 'notify_reminders',
   calendar: 'notify_calendar',
   decision: 'notify_decisions',
+  activity: 'notify_activity',
 };
 
 export interface NotifyInput {
@@ -99,4 +100,52 @@ export async function dispatchDueReminders(householdId?: string): Promise<number
     await q('UPDATE items SET reminder_sent_at = now() WHERE id = $1', [it.id]);
   }
   return n;
+}
+
+const BUILTIN_LIST_NAMES: Record<string, string> = { grocery: 'Groceries', home: 'Home & Gadgets', idea: 'Shopping & Other' };
+
+export async function listLabel(listId: string | null): Promise<string | null> {
+  if (!listId) return null;
+  const l = await q1<{ module: string; name: string }>('SELECT module, name FROM lists WHERE id = $1', [listId]);
+  return l ? BUILTIN_LIST_NAMES[l.module] ?? l.name : null;
+}
+
+/**
+ * Tell the partner what just happened to a shared item, in one short line:
+ * "Nella marked Milk as urgent in @Groceries". Several additions to the same
+ * list in a row are folded into one line while it is still unread.
+ */
+export async function tellPartner(
+  actor: { id: string; display_name: string }, partnerId: string | null | undefined,
+  item: { id: string; title: string; workspace_id: string; list_id: string | null },
+  verb: 'added' | 'completed' | 'urgent' | 'removed' | 'moved', extra?: string,
+) {
+  if (!partnerId) return;
+  const audience = await workspaceAudience(item.workspace_id);
+  if (!audience.includes(partnerId)) return;
+  const list = await listLabel(item.list_id);
+  const where = list ? ` in @${list}` : '';
+  const name = actor.display_name.split(' ')[0];
+  if (verb === 'added') {
+    const key = `added:${actor.id}:${item.list_id}`;
+    const open = await q1<{ id: string; body: string }>(
+      `SELECT id, body FROM notifications WHERE user_id = $1 AND type = 'activity' AND read_at IS NULL AND dedupe_key LIKE $2 || ':%'
+         AND created_at > now() - interval '3 hours' ORDER BY created_at DESC LIMIT 1`, [partnerId, key]);
+    if (open) {
+      const titles = [...open.body.split('\n').filter(Boolean), item.title];
+      const shown = titles.length <= 2 ? titles.join(' and ') : `${titles.slice(0, 2).join(', ')} +${titles.length - 2}`;
+      await q('UPDATE notifications SET title = $2, body = $3, entity_id = $4, created_at = now() WHERE id = $1',
+        [open.id, `${name} added ${shown} to @${list ?? 'a list'}`.slice(0, 200), titles.join('\n').slice(0, 500), item.id]);
+      return;
+    }
+    await notify({ recipients: [partnerId], actorId: actor.id, workspaceId: item.workspace_id, type: 'activity',
+      title: `${name} added ${item.title} to @${list ?? 'a list'}`, body: item.title, entityType: 'item', entityId: item.id, dedupeKey: `${key}:${Date.now()}` });
+    return;
+  }
+  const text = verb === 'completed' ? `${name} completed ${item.title}${where}`
+    : verb === 'urgent' ? `${name} marked ${item.title} as urgent${where}`
+    : verb === 'removed' ? `${name} removed ${item.title}${where}`
+    : `${name} moved ${item.title} to ${extra ?? 'another list'}`;
+  await notify({ recipients: [partnerId], actorId: actor.id, workspaceId: item.workspace_id, type: 'activity', title: text,
+    entityType: 'item', entityId: item.id, dedupeKey: `${verb}:${item.id}:${Date.now()}` });
 }

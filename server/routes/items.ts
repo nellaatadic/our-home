@@ -5,7 +5,7 @@ import { requireAuth } from '../lib/auth.js';
 import { assertMember, assertWorkspace, loadEntity, workspaceFor, type AppEnv, type Auth } from '../lib/access.js';
 import { badRequest, dateStr, notFound, optText, optUrl, parse, priority, space, timeStr, uuid } from '../lib/http.js';
 import { decorate } from '../lib/serialize.js';
-import { logActivity, notify } from '../lib/notify.js';
+import { logActivity, notify, tellPartner } from '../lib/notify.js';
 import { fetchLinkPreview } from '../lib/linkpreview.js';
 import { LIST_NAMES } from '../lib/defaults.js';
 import { addDays, addMonths, todayIn, zonedToUtc } from '../lib/time.js';
@@ -185,7 +185,8 @@ itemRoutes.patch('/lists/:id', async (c) => {
     emoji: z.string().trim().min(1).max(16).optional(), color: z.string().regex(/^#[0-9a-f]{6}$/i).optional(),
   }), await c.req.json());
   if (b.archived && list.is_default) throw badRequest('The default list cannot be archived');
-  if ((b.name || b.emoji || b.color) && list.module !== 'custom') throw badRequest('Built-in lists keep their name');
+  // Built-in lists keep their name, but their emoji and colour can change.
+  if (b.name && list.module !== 'custom') throw badRequest('Built-in lists keep their name');
   const row = await q1<any>(
     `UPDATE lists SET name = COALESCE($2, name), emoji = COALESCE($4, emoji), color = COALESCE($5, color), updated_at = now(),
        archived_at = CASE WHEN $3::boolean IS NULL THEN archived_at WHEN $3 THEN COALESCE(archived_at, date_trunc('milliseconds', now())) ELSE NULL END
@@ -330,8 +331,8 @@ export async function insertItem(a: Auth, sp: 'me' | 'us', b: z.infer<typeof cre
 async function notifyNewSharedItem(a: Auth, row: any) {
   if (!a.partner) return;
   const forPartner = row.intended_for_user_id === a.partner.id || row.assigned_to === a.partner.id;
-  // Grocery additions are frequent and low-stakes; only notify when assigned.
-  if (row.module === 'grocery' && !forPartner) return;
+  // Everyday additions become one short activity line (folded together).
+  if (!forPartner) return tellPartner(a.user, a.partner.id, row, 'added');
   await notify({
     recipients: [a.partner.id], actorId: a.user.id, workspaceId: row.workspace_id,
     type: forPartner && row.assigned_to === a.partner.id ? 'assigned' : 'shared',
@@ -410,7 +411,10 @@ itemRoutes.patch('/items/:id', async (c) => {
   if (row.module === 'grocery') { delete cols.decision_status; }
   const keys = Object.keys(cols);
   let updated = row;
-  if (moduleChange) await logActivity(row.workspace_id, 'item', row.id, a.user.id, 'moved', `Moved to ${moduleChange}`);
+  if (moduleChange) {
+    await logActivity(row.workspace_id, 'item', row.id, a.user.id, 'moved', `Moved to ${moduleChange}`);
+    await tellPartner(a.user, a.partner?.id, row, 'moved', `@${moduleChange}`);
+  }
   if (keys.length) {
     updated = await q1(
       `UPDATE items SET ${keys.map((k, i) => `${k} = $${i + 3}`).join(', ')}, updated_at = now(), updated_by = $2 WHERE id = $1 RETURNING *`,
@@ -418,6 +422,7 @@ itemRoutes.patch('/items/:id', async (c) => {
     );
     const changed = keys.filter((k) => String(row[k] ?? '') !== String(updated[k] ?? ''));
     if (changed.length) await logActivity(row.workspace_id, 'item', row.id, a.user.id, 'updated', `Changed ${changed.join(', ').replace(/_/g, ' ')}`);
+    if (changed.includes('urgent') && updated.urgent) await tellPartner(a.user, a.partner?.id, updated, 'urgent');
     if (changed.includes('assigned_to') && updated.assigned_to && updated.assigned_to !== a.user.id) {
       await notify({ recipients: [updated.assigned_to], actorId: a.user.id, workspaceId: row.workspace_id, type: 'assigned', title: `${a.user.display_name} assigned “${updated.title}” to you`, entityType: 'item', entityId: row.id });
     }
@@ -464,16 +469,19 @@ itemRoutes.post('/items/:id/purchase', async (c) => {
        WHERE id = $1 RETURNING *`,
       [target.id, qty, purchased, b.expires_on ?? null, b.storage_location, a.user.id],
     );
-    await q('UPDATE items SET archived_at = now(), updated_at = now(), updated_by = $2 WHERE id = $1', [row.id, a.user.id]);
+    await q(`UPDATE items SET archived_at = now(), completed_at = date_trunc('milliseconds', now()), completed_by = $2, updated_at = now(), updated_by = $2 WHERE id = $1`, [row.id, a.user.id]);
+    await tellPartner(a.user, a.partner?.id, row, 'completed');
     await logActivity(row.workspace_id, 'item', target.id, a.user.id, 'restocked', `Bought ${qty ?? ''} ${row.title}`.replace(/\s+/g, ' '));
     return c.json({ item: (await serializeItems(a, [merged]))[0], merged: true });
   }
   const updated = await q1(
     `UPDATE items SET grocery_state = 'stock', quantity = $2, purchased_on = $3, expires_on = COALESCE($4, expires_on),
-       storage_location = COALESCE($5, storage_location), updated_at = now(), updated_by = $6 WHERE id = $1 RETURNING *`,
+       storage_location = COALESCE($5, storage_location), completed_at = date_trunc('milliseconds', now()), completed_by = $6,
+       updated_at = now(), updated_by = $6 WHERE id = $1 RETURNING *`,
     [row.id, qty, purchased, b.expires_on ?? null, b.storage_location, a.user.id],
   );
   await logActivity(row.workspace_id, 'item', row.id, a.user.id, 'purchased', 'Moved to STOCK');
+  await tellPartner(a.user, a.partner?.id, row, 'completed');
   return c.json({ item: (await serializeItems(a, [updated]))[0], merged: false });
 });
 
@@ -484,10 +492,26 @@ itemRoutes.post('/items/:id/need', async (c) => {
   if (row.grocery_state !== 'stock') throw badRequest('Only STOCK items can be moved back to NEED');
   const b = parse(z.object({ quantity: z.number().min(0).max(1e6).nullish() }), await c.req.json().catch(() => ({})));
   const updated = await q1(
-    `UPDATE items SET grocery_state = 'need', quantity = $2, purchased_on = NULL, expires_on = NULL, updated_at = now(), updated_by = $3 WHERE id = $1 RETURNING *`,
+    `UPDATE items SET grocery_state = 'need', quantity = $2, purchased_on = NULL, expires_on = NULL, completed_at = NULL, completed_by = NULL, updated_at = now(), updated_by = $3 WHERE id = $1 RETURNING *`,
     [row.id, b.quantity ?? null, a.user.id],
   );
   await logActivity(row.workspace_id, 'item', row.id, a.user.id, 'needed', 'Moved back to NEED');
+  return c.json({ item: (await serializeItems(a, [updated]))[0] });
+});
+
+/**
+ * Undo a tick: the item goes back on the list exactly as it was, and the
+ * partner's "completed" line is withdrawn if they have not seen it yet.
+ */
+itemRoutes.post('/items/:id/uncomplete', async (c) => {
+  const a = requireAuth(c);
+  const row = await loadEntity<any>(a, 'item', c.req.param('id'));
+  if (!row.completed_at) throw badRequest('This item is not completed');
+  const updated = row.archived_at
+    ? await q1(`UPDATE items SET archived_at = NULL, completed_at = NULL, completed_by = NULL, updated_at = now(), updated_by = $2 WHERE id = $1 RETURNING *`, [row.id, a.user.id])
+    : await q1(`UPDATE items SET grocery_state = 'need', purchased_on = NULL, completed_at = NULL, completed_by = NULL, updated_at = now(), updated_by = $2 WHERE id = $1 RETURNING *`, [row.id, a.user.id]);
+  await q(`DELETE FROM notifications WHERE entity_type = 'item' AND entity_id = $1 AND type = 'activity' AND dedupe_key LIKE 'completed:%' AND read_at IS NULL`, [row.id]);
+  await logActivity(row.workspace_id, 'item', row.id, a.user.id, 'needed', 'Back on the list (undo)');
   return c.json({ item: (await serializeItems(a, [updated]))[0] });
 });
 
